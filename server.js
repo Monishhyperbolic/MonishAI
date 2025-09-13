@@ -86,7 +86,7 @@ app.post('/upload', upload.single('image'), async (req, res) => {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model: "llama-3.2-11b-vision-preview", // Reliable vision model
+        model: "meta-llama/llama-4-scout-17b-16e-instruct", // Reliable vision model
         messages: [
           { role: "user", content: [
             { type: "text", text: "Analyze the image. If it contains a multiple-choice question (MCQ), return only the letter of the correct option (e.g., 'A', 'B'). If it is a fill-in-the-blank question, return only the exact answer (e.g., '42'). If it contains code or pseudocode, return only the code block without explanations. Do not provide any additional text or explanations." },
