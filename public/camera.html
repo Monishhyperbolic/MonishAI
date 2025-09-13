@@ -1,52 +1,84 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
+  <meta charset="UTF-8">
   <title>Mobile Camera</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
-    body { background: #000; color: #fff; font-family: Arial, sans-serif; text-align: center; padding-top: 40px; }
-    video { margin: 20px auto; display: block; border: 2px solid #fff; }
-    button { margin-top: 30px; padding: 10px 32px; font-size: 18px; }
+    body { background: #000; color: #fff; font-family: Arial, sans-serif; text-align: center; margin: 0; padding: 0;}
+    h1 { padding-top: 2vh; }
+    #video { border: 2px solid #fff; border-radius: 8px; width: 95vw; max-width: 400px; height: 60vw; max-height: 60vh; object-fit: cover; }
+    .btns { margin-top: 3vh; }
+    button { margin: 1vh 2vw; padding: 12px 28px; font-size: 19px; border-radius: 8px; border: none; background: #fff; color: #000; }
+    button:active { background: #333; color: #fff; }
+    @media (max-width: 600px) {
+      button { width: 90vw; max-width: 340px; margin-bottom: 6px;}
+    }
   </style>
 </head>
 <body>
-  <h1>Camera Capture</h1>
-  <video id="video" width="320" height="240" autoplay playsinline></video>
-  <br/>
-  <button id="start-btn">Start Capturing</button>
-  <button id="stop-btn">Stop</button>
-  <script>
-    const video = document.getElementById('video');
-    const startBtn = document.getElementById('start-btn');
-    const stopBtn = document.getElementById('stop-btn');
-    let stream;
-    let captureInterval;
-    // Access camera
-    async function startCamera() {
-      stream = await navigator.mediaDevices.getUserMedia({ video: true });
-      video.srcObject = stream;
+  <h1>Camera Capture (Back Cam)</h1>
+  <video id="video" autoplay playsinline></video>
+  <div class="btns">
+    <button id="start-btn">Start Auto-Capture</button>
+    <button id="stop-btn">Stop</button>
+    <button id="manual-btn">Take Photo Now</button>
+  </div>
+<script>
+const video = document.getElementById('video');
+const startBtn = document.getElementById('start-btn');
+const stopBtn = document.getElementById('stop-btn');
+const manualBtn = document.getElementById('manual-btn');
+let stream;
+let captureInterval;
+
+async function startCamera() {
+  // Prefer back camera
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { exact: "environment" } }, audio: false
+    });
+  } catch {
+    // fallback
+    stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+  }
+  video.srcObject = stream;
+}
+startCamera();
+
+function captureAndSend() {
+  const canvas = document.createElement('canvas');
+  canvas.width = video.videoWidth || 320;
+  canvas.height = video.videoHeight || 240;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  canvas.toBlob(async (blob) => {
+    const formData = new FormData();
+    formData.append('image', blob, 'frame.jpg');
+    try {
+      await fetch('/upload', { method: 'POST', body: formData });
+      manualBtn.disabled = false;
+      manualBtn.textContent = "Take Photo Now";
+    } catch (e) {
+      manualBtn.textContent = "Error. Try Again";
+      manualBtn.disabled = false;
     }
-    startCamera();
-    function captureAndSend() {
-      const canvas = document.createElement('canvas');
-      canvas.width = video.videoWidth || 320;
-      canvas.height = video.videoHeight || 240;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      canvas.toBlob(async (blob) => {
-        const formData = new FormData();
-        formData.append('image', blob, 'frame.jpg');
-        await fetch('/upload', { method: 'POST', body: formData });
-      }, 'image/jpeg');
-    }
-    startBtn.onclick = function () {
-      if (captureInterval) clearInterval(captureInterval);
-      captureAndSend(); // Immediate capture
-      captureInterval = setInterval(captureAndSend, 8000);
-    };
-    stopBtn.onclick = function () {
-      if (captureInterval) clearInterval(captureInterval);
-    };
-  </script>
+  }, 'image/jpeg');
+}
+
+startBtn.onclick = function () {
+  if (captureInterval) clearInterval(captureInterval);
+  captureAndSend(); // immediate first capture
+  captureInterval = setInterval(captureAndSend, 8000);
+};
+stopBtn.onclick = function () {
+  if (captureInterval) clearInterval(captureInterval);
+};
+manualBtn.onclick = function () {
+  manualBtn.textContent = "Sending...";
+  manualBtn.disabled = true;
+  captureAndSend();
+};
+</script>
 </body>
 </html>

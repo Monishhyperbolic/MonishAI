@@ -2,11 +2,13 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Answers</title>
   <style>
-    body { background: #000; color: #fff; font-family: Arial, sans-serif; text-align: center; padding-top: 50px; }
-    #answers { margin-top: 30px; }
-    .answer-item { border: 1px solid #fff; border-radius: 4px; margin: 12px 0; padding: 14px; background: #111; }
+    body { background: #000; color: #fff; font-family: Arial, sans-serif; margin: 0; text-align: center;}
+    h1 { padding-top: 2vh;}
+    #answers { margin-top: 3vh; padding: 0 2vw;}
+    .answer-item { border: 1px solid #fff; border-radius: 4px; margin: 10px 0; padding: 14px; background: #111; text-align: left; max-width: 500px; margin-left: auto; margin-right: auto;}
   </style>
 </head>
 <body>
@@ -14,19 +16,23 @@
   <div id="answers"></div>
   <script>
     async function fetchAnswers() {
-      const response = await fetch('/answers');
-      const data = await response.json();
-      const answersDiv = document.getElementById('answers');
-      answersDiv.innerHTML = '';
-      data.forEach(item => {
-        const div = document.createElement('div');
-        div.className = 'answer-item';
-        div.textContent = `${item.timestamp.split('.')[0]}: ${item.answer}`;
-        answersDiv.appendChild(div);
-      });
+      try {
+        const response = await fetch('/answers');
+        const data = await response.json();
+        const answersDiv = document.getElementById('answers');
+        answersDiv.innerHTML = '';
+        data.forEach(item => {
+          const div = document.createElement('div');
+          div.className = 'answer-item';
+          div.textContent = `${item.timestamp.split('.')[0]}: ${item.answer}`;
+          answersDiv.appendChild(div);
+        });
+      } catch (e) {
+        // Optionally display error to user
+      }
     }
     fetchAnswers();
-    setInterval(fetchAnswers, 8000);
+    setInterval(fetchAnswers, 4000); // Poll for answers every 4 seconds
   </script>
 </body>
 </html>
