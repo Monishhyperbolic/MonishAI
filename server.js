@@ -3,7 +3,6 @@ const express = require('express');
 const multer = require('multer');
 const sqlite3 = require('sqlite3').verbose();
 const fetch = require('node-fetch');
-const { createCanvas, loadImage } = require('canvas'); // Add 'canvas' npm package for image resize
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
@@ -27,7 +26,7 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
 app.use(cors());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Init DB (unchanged)
+// Init DB
 db.serialize(() => {
   db.run(`CREATE TABLE IF NOT EXISTS answers (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -38,15 +37,6 @@ db.serialize(() => {
   });
 });
 
-// Helper: Resize and compress image
-async function resizeImage(buffer, maxWidth = 640, quality = 0.7) {
-  const img = await loadImage(buffer);
-  const canvas = createCanvas(Math.min(maxWidth, img.width), (img.width / img.height) * Math.min(maxWidth, img.width));
-  const ctx = canvas.getContext('2d');
-  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-  return canvas.toBuffer('image/jpeg', { quality });
-}
-
 // Upload endpoint
 app.post('/upload', upload.single('image'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
@@ -55,20 +45,21 @@ app.post('/upload', upload.single('image'), async (req, res) => {
   try {
     // Validate image
     if (!req.file.mimetype.startsWith('image/jpeg')) {
+      fs.unlinkSync(tempPath);
       return res.status(400).json({ error: 'Only JPEG images are supported' });
     }
 
-    // Read, resize, and compress image
-    let imgBuffer = fs.readFileSync(tempPath);
-    console.log('Original image size (bytes):', imgBuffer.length);
-    imgBuffer = await resizeImage(imgBuffer); // Resize to reduce size
-    console.log('Resized image size (bytes):', imgBuffer.length);
+    // Read image buffer and encode to base64 (no resizing)
+    const imgBuffer = fs.readFileSync(tempPath);
+    console.log('Image size (bytes):', imgBuffer.length);
     if (imgBuffer.length > 10 * 1024 * 1024) { // 10MB limit
-      throw new Error('Image too large after compression');
+      fs.unlinkSync(tempPath);
+      return res.status(400).json({ error: 'Image too large (max 10MB)' });
     }
     const b64 = imgBuffer.toString('base64');
 
     if (!process.env.GROQ_API_KEY) {
+      fs.unlinkSync(tempPath);
       return res.status(500).json({ error: 'GROQ_API_KEY not configured' });
     }
 
@@ -84,7 +75,7 @@ app.post('/upload', upload.single('image'), async (req, res) => {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model: "meta-llama/llama-4-scout-17b-16e-instruct", // Confirmed vision model
+        model: "meta-llama/llama-4-scout-17b-16e-instruct", // Vision-capable model (fallback: "llama-3.2-11b-vision-preview")
         messages: [
           { role: "user", content: [
             { type: "text", text: "Interpret this image and give the answer (code, pseudocode, MCQ solution, etc.):" },
@@ -96,23 +87,26 @@ app.post('/upload', upload.single('image'), async (req, res) => {
     });
     clearTimeout(timeoutId);
 
-    let errorText;
+    let responseText;
     try {
-      errorText = await groqRes.text();
-    } catch (parseErr) {
-      throw new Error(`Failed to read Groq response: ${parseErr.message}`);
+      responseText = await groqRes.text();
+    } catch (readErr) {
+      fs.unlinkSync(tempPath);
+      throw new Error(`Failed to read Groq response: ${readErr.message}`);
     }
 
     if (!groqRes.ok) {
-      console.error('Groq API error:', groqRes.status, errorText);
-      return res.status(500).json({ error: `Groq API failed: ${groqRes.status}`, details: errorText });
+      console.error('Groq API error:', groqRes.status, responseText);
+      fs.unlinkSync(tempPath);
+      return res.status(500).json({ error: `Groq API failed: ${groqRes.status}`, details: responseText });
     }
 
     let groqJson;
     try {
-      groqJson = JSON.parse(errorText);
+      groqJson = JSON.parse(responseText);
     } catch (parseErr) {
-      console.error('JSON parse error on Groq response:', parseErr, errorText);
+      console.error('JSON parse error on Groq response:', parseErr, responseText);
+      fs.unlinkSync(tempPath);
       throw new Error('Invalid JSON from Groq API');
     }
 
@@ -123,6 +117,7 @@ app.post('/upload', upload.single('image'), async (req, res) => {
     db.run('INSERT INTO answers (answer) VALUES (?)', [answer], function (err) {
       if (err) {
         console.error('DB insert error:', err);
+        fs.unlinkSync(tempPath);
         return res.status(500).json({ error: 'Database storage failed', details: err.message });
       }
       console.log('Answer stored successfully, ID:', this.lastID);
@@ -136,11 +131,12 @@ app.post('/upload', upload.single('image'), async (req, res) => {
   }
 });
 
-// Answers API (unchanged, with cache headers)
+// Answers API
 app.get('/answers', (req, res) => {
   res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
   res.set('Pragma', 'no-cache');
   res.set('Expires', '0');
+
   db.all('SELECT answer, timestamp FROM answers ORDER BY timestamp DESC LIMIT 20', (err, rows) => {
     if (err) {
       console.error('Error fetching answers:', err);
@@ -151,7 +147,7 @@ app.get('/answers', (req, res) => {
   });
 });
 
-// Debug endpoints (unchanged)
+// Debug endpoints
 app.get('/debug/db', (req, res) => {
   db.all('SELECT * FROM answers ORDER BY id DESC LIMIT 5', (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
