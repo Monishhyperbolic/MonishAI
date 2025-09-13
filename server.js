@@ -23,7 +23,7 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
 });
 
 // Middleware
-app.use(cors({ origin: 'http://your-frontend-url', methods: ['GET', 'POST'] }));
+app.use(cors()); // Allow all origins for simplicity; restrict in production
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Init DB
@@ -60,7 +60,7 @@ app.post('/upload', upload.single('image'), async (req, res) => {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model: "llama-3.1-70b", // Replace with a valid vision-capable model
+        model: "llava-13b", // Use a vision-capable model
         messages: [
           { role: "user", content: [
             { type: "text", text: "Interpret this image and give the answer (code, pseudocode, MCQ solution, etc.):" },
@@ -72,9 +72,10 @@ app.post('/upload', upload.single('image'), async (req, res) => {
     });
 
     if (!groqRes.ok) {
-      console.error('Groq API error:', groqRes.status, await groqRes.text());
+      const errorText = await groqRes.text();
+      console.error('Groq API error:', groqRes.status, errorText);
       fs.unlinkSync(req.file.path);
-      return res.status(500).json({ error: 'Failed to fetch response from Groq API' });
+      return res.status(500).json({ error: 'Failed to fetch response from Groq API', details: errorText });
     }
 
     const groqJson = await groqRes.json();
@@ -117,6 +118,14 @@ app.get('/debug/db', (req, res) => {
     if (err) return res.status(500).json({ error: err.message });
     res.json(rows);
   });
+});
+
+// Test upload endpoint (for manual testing)
+app.post('/test-upload', upload.single('image'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  console.log('Test upload received:', req.file);
+  fs.unlinkSync(req.file.path);
+  res.json({ message: 'Test upload successful' });
 });
 
 // Start server

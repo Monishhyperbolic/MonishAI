@@ -33,20 +33,18 @@ let stream;
 let captureInterval;
 
 async function startCamera() {
-  // Prefer back camera
   try {
     stream = await navigator.mediaDevices.getUserMedia({
       video: { facingMode: { exact: "environment" } }, audio: false
     });
   } catch {
-    // fallback
     stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
   }
   video.srcObject = stream;
 }
 startCamera();
 
-function captureAndSend() {
+async function captureAndSend() {
   const canvas = document.createElement('canvas');
   canvas.width = video.videoWidth || 320;
   canvas.height = video.videoHeight || 240;
@@ -56,20 +54,28 @@ function captureAndSend() {
     const formData = new FormData();
     formData.append('image', blob, 'frame.jpg');
     try {
-      await fetch('/upload', { method: 'POST', body: formData });
+      const response = await fetch('/upload', { method: 'POST', body: formData }); // Replace with full URL if needed
+      if (!response.ok) {
+        throw new Error(`Upload failed with status ${response.status}`);
+      }
       manualBtn.disabled = false;
       manualBtn.textContent = "Take Photo Now";
     } catch (e) {
-      manualBtn.textContent = "Error. Try Again";
+      console.error('Error uploading image:', e);
+      manualBtn.textContent = `Error: ${e.message}`;
       manualBtn.disabled = false;
+      setTimeout(() => {
+        manualBtn.textContent = "Take Photo Now";
+        manualBtn.disabled = false;
+      }, 3000);
     }
   }, 'image/jpeg');
 }
 
 startBtn.onclick = function () {
   if (captureInterval) clearInterval(captureInterval);
-  captureAndSend(); // immediate first capture
-  captureInterval = setInterval(captureAndSend, 8000);
+  captureAndSend(); // Immediate first capture
+  captureInterval = setInterval(captureAndSend, 15000); // Poll every 15 seconds
 };
 stopBtn.onclick = function () {
   if (captureInterval) clearInterval(captureInterval);

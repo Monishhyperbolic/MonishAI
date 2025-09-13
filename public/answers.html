@@ -9,6 +9,7 @@
     h1 { padding-top: 2vh;}
     #answers { margin-top: 3vh; padding: 0 2vw;}
     .answer-item { border: 1px solid #fff; border-radius: 4px; margin: 10px 0; padding: 14px; background: #111; text-align: left; max-width: 500px; margin-left: auto; margin-right: auto;}
+    .error { color: red; }
   </style>
 </head>
 <body>
@@ -17,10 +18,16 @@
   <script>
     async function fetchAnswers() {
       try {
-        const response = await fetch('/answers');
+        const response = await fetch('/answers'); // Replace with full URL if needed, e.g., 'https://your-server-url/answers'
+        if (!response.ok) {
+          throw new Error(`HTTP error! Status: ${response.status}`);
+        }
         const data = await response.json();
         const answersDiv = document.getElementById('answers');
         answersDiv.innerHTML = '';
+        if (data.length === 0) {
+          answersDiv.innerHTML = '<p>No answers available yet.</p>';
+        }
         data.forEach(item => {
           const div = document.createElement('div');
           div.className = 'answer-item';
@@ -28,11 +35,13 @@
           answersDiv.appendChild(div);
         });
       } catch (e) {
-        // Optionally display error to user
+        console.error('Error fetching answers:', e);
+        const answersDiv = document.getElementById('answers');
+        answersDiv.innerHTML = `<p class="error">Error fetching answers: ${e.message}</p>`;
       }
     }
     fetchAnswers();
-    setInterval(fetchAnswers, 2000); // Poll for answers every 4 seconds
+    setInterval(fetchAnswers, 2000); // Poll every 2 seconds
   </script>
 </body>
 </html>
