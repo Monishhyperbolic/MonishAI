@@ -8,8 +8,9 @@ const fs = require('fs');
 require('dotenv').config();
 
 const app = express();
-const upload = multer({ dest: 'uploads/' });
-const db = new sqlite3.Database('answers.db');
+const db = new sqlite3.Database('/data/answers.db');
+const upload = multer({ dest: '/data/uploads' });
+
 
 // Middleware
 app.use(cors());
