@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const multer = require('multer');
 const sqlite3 = require('sqlite3').verbose();
-const fetch = require('node-fetch');
+const fetch = require('node-fetch'); // Ensure node-fetch is imported
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
@@ -49,10 +49,10 @@ app.post('/upload', upload.single('image'), async (req, res) => {
       return res.status(400).json({ error: 'Only JPEG images are supported' });
     }
 
-    // Read image buffer and encode to base64 (no resizing)
+    // Read image buffer and encode to base64
     const imgBuffer = fs.readFileSync(tempPath);
     console.log('Image size (bytes):', imgBuffer.length);
-    if (imgBuffer.length > 10 * 1024 * 1024) { // 10MB limit
+    if (imgBuffer.length > 10 * 1024 * 1024) {
       fs.unlinkSync(tempPath);
       return res.status(400).json({ error: 'Image too large (max 10MB)' });
     }
@@ -63,9 +63,14 @@ app.post('/upload', upload.single('image'), async (req, res) => {
       return res.status(500).json({ error: 'GROQ_API_KEY not configured' });
     }
 
+    if (typeof fetch !== 'function') {
+      fs.unlinkSync(tempPath);
+      throw new Error('fetch is not a function - check node-fetch installation');
+    }
+
     // Groq API call with timeout
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
 
     const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
@@ -75,7 +80,7 @@ app.post('/upload', upload.single('image'), async (req, res) => {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model: "meta-llama/llama-4-scout-17b-16e-instruct", // Vision-capable model (fallback: "llama-3.2-11b-vision-preview")
+        model: "meta-llama/llama-4-scout-17b-16e-instruct", // Vision-capable; fallback: "llama-3.2-11b-vision-preview"
         messages: [
           { role: "user", content: [
             { type: "text", text: "Interpret this image and give the answer (code, pseudocode, MCQ solution, etc.):" },
@@ -136,7 +141,6 @@ app.get('/answers', (req, res) => {
   res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
   res.set('Pragma', 'no-cache');
   res.set('Expires', '0');
-
   db.all('SELECT answer, timestamp FROM answers ORDER BY timestamp DESC LIMIT 20', (err, rows) => {
     if (err) {
       console.error('Error fetching answers:', err);
