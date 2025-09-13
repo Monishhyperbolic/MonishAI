@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const multer = require('multer');
 const sqlite3 = require('sqlite3').verbose();
-const fetch = require('node-fetch'); // Ensure node-fetch is imported
+const fetch = require('node-fetch');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
@@ -57,6 +57,13 @@ app.post('/upload', upload.single('image'), async (req, res) => {
       return res.status(400).json({ error: 'Image too large (max 10MB)' });
     }
     const b64 = imgBuffer.toString('base64');
+    console.log('Base64 prefix:', b64.substring(0, 20)); // Debug JPEG signature
+
+    // Validate base64
+    if (!b64.startsWith('/9j/')) {
+      fs.unlinkSync(tempPath);
+      return res.status(400).json({ error: 'Invalid JPEG base64 encoding' });
+    }
 
     if (!process.env.GROQ_API_KEY) {
       fs.unlinkSync(tempPath);
@@ -68,10 +75,9 @@ app.post('/upload', upload.single('image'), async (req, res) => {
       throw new Error('fetch is not a function - check node-fetch installation');
     }
 
-    // Groq API call with timeout
+    // Groq API call
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 30000);
-
     const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       signal: controller.signal,
@@ -80,10 +86,10 @@ app.post('/upload', upload.single('image'), async (req, res) => {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model: "meta-llama/llama-4-scout-17b-16e-instruct", // Vision-capable; fallback: "llama-3.2-11b-vision-preview"
+        model: "llama-3.2-11b-vision-preview", // Reliable vision model
         messages: [
           { role: "user", content: [
-            { type: "text", text: "Interpret this image and give the answer (code, pseudocode, MCQ solution, etc.):" },
+            { type: "text", text: "Analyze the image. If it contains a multiple-choice question (MCQ), return only the letter of the correct option (e.g., 'A', 'B'). If it is a fill-in-the-blank question, return only the exact answer (e.g., '42'). If it contains code or pseudocode, return only the code block without explanations. Do not provide any additional text or explanations." },
             { type: "image_url", image_url: { url: `data:image/jpeg;base64,${b64}` } }
           ] }
         ],
@@ -115,8 +121,19 @@ app.post('/upload', upload.single('image'), async (req, res) => {
       throw new Error('Invalid JSON from Groq API');
     }
 
-    console.log('Groq API response summary:', groqJson.choices?.[0]?.message?.content?.substring(0, 200) + '...');
-    const answer = groqJson.choices?.[0]?.message?.content || 'No answer returned from Groq';
+    let answer = groqJson.choices?.[0]?.message?.content || 'No answer returned from Groq';
+    console.log('Groq API response summary:', answer.substring(0, 200) + '...');
+
+    // Basic cleanup: trim whitespace and remove extra text if present
+    answer = answer.trim();
+    // For MCQs, extract single letter if possible
+    if (/^[A-D]$/.test(answer)) {
+      // Valid MCQ option (A, B, C, D)
+    } else if (answer.includes('\n') && !answer.startsWith('```')) {
+      // For non-code answers, take first line to avoid verbose text
+      answer = answer.split('\n')[0].trim();
+    }
+    // Code blocks are preserved as-is (delimited by ```)
 
     // Store in DB
     db.run('INSERT INTO answers (answer) VALUES (?)', [answer], function (err) {
