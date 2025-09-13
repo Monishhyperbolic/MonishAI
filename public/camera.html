@@ -11,6 +11,8 @@
     .btns { margin-top: 3vh; }
     button { margin: 1vh 2vw; padding: 12px 28px; font-size: 19px; border-radius: 8px; border: none; background: #fff; color: #000; }
     button:active { background: #333; color: #fff; }
+    button:disabled { background: #555; color: #aaa; }
+    .error { color: red; font-size: 14px; margin-top: 10px; }
     @media (max-width: 600px) {
       button { width: 90vw; max-width: 340px; margin-bottom: 6px;}
     }
@@ -24,11 +26,13 @@
     <button id="stop-btn">Stop</button>
     <button id="manual-btn">Take Photo Now</button>
   </div>
+  <div id="error-msg" class="error" style="display: none;"></div>
 <script>
 const video = document.getElementById('video');
 const startBtn = document.getElementById('start-btn');
 const stopBtn = document.getElementById('stop-btn');
 const manualBtn = document.getElementById('manual-btn');
+const errorMsg = document.getElementById('error-msg');
 let stream;
 let captureInterval;
 
@@ -37,7 +41,10 @@ async function startCamera() {
     stream = await navigator.mediaDevices.getUserMedia({
       video: { facingMode: { exact: "environment" } }, audio: false
     });
-  } catch {
+  } catch (e) {
+    console.error('Camera error:', e);
+    errorMsg.textContent = 'Camera access failed. Check permissions.';
+    errorMsg.style.display = 'block';
     stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
   }
   video.srcObject = stream;
@@ -45,6 +52,10 @@ async function startCamera() {
 startCamera();
 
 async function captureAndSend() {
+  if (!video.videoWidth) {
+    console.error('Video not ready');
+    return;
+  }
   const canvas = document.createElement('canvas');
   canvas.width = video.videoWidth || 320;
   canvas.height = video.videoHeight || 240;
@@ -54,28 +65,29 @@ async function captureAndSend() {
     const formData = new FormData();
     formData.append('image', blob, 'frame.jpg');
     try {
-      const response = await fetch('/upload', { method: 'POST', body: formData }); // Replace with full URL if needed
+      const response = await fetch('/upload', { method: 'POST', body: formData });
+      const data = await response.json();
       if (!response.ok) {
-        throw new Error(`Upload failed with status ${response.status}`);
+        throw new Error(data.error || `Upload failed with status ${response.status}`);
       }
+      console.log('Upload success:', data);
+      errorMsg.style.display = 'none';
       manualBtn.disabled = false;
       manualBtn.textContent = "Take Photo Now";
     } catch (e) {
       console.error('Error uploading image:', e);
-      manualBtn.textContent = `Error: ${e.message}`;
+      errorMsg.textContent = `Upload error: ${e.message}`;
+      errorMsg.style.display = 'block';
       manualBtn.disabled = false;
-      setTimeout(() => {
-        manualBtn.textContent = "Take Photo Now";
-        manualBtn.disabled = false;
-      }, 3000);
+      manualBtn.textContent = "Take Photo Now";
     }
-  }, 'image/jpeg');
+  }, 'image/jpeg', 0.8); // Quality 80% to reduce size
 }
 
 startBtn.onclick = function () {
   if (captureInterval) clearInterval(captureInterval);
-  captureAndSend(); // Immediate first capture
-  captureInterval = setInterval(captureAndSend, 15000); // Poll every 15 seconds
+  captureAndSend();
+  captureInterval = setInterval(captureAndSend, 15000); // 15s interval
 };
 stopBtn.onclick = function () {
   if (captureInterval) clearInterval(captureInterval);
@@ -83,6 +95,7 @@ stopBtn.onclick = function () {
 manualBtn.onclick = function () {
   manualBtn.textContent = "Sending...";
   manualBtn.disabled = true;
+  errorMsg.style.display = 'none';
   captureAndSend();
 };
 </script>
