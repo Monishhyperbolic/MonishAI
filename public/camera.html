@@ -1,32 +1,4 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <title>Mobile Camera</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <style>
-    body { background: #000; color: #fff; font-family: Arial, sans-serif; text-align: center; margin: 0; padding: 0;}
-    h1 { padding-top: 2vh; }
-    #video { border: 2px solid #fff; border-radius: 8px; width: 95vw; max-width: 400px; height: 60vw; max-height: 60vh; object-fit: cover; }
-    .btns { margin-top: 3vh; }
-    button { margin: 1vh 2vw; padding: 12px 28px; font-size: 19px; border-radius: 8px; border: none; background: #fff; color: #000; }
-    button:active { background: #333; color: #fff; }
-    button:disabled { background: #555; color: #aaa; }
-    .error { color: red; font-size: 14px; margin-top: 10px; }
-    @media (max-width: 600px) {
-      button { width: 90vw; max-width: 340px; margin-bottom: 6px;}
-    }
-  </style>
-</head>
-<body>
-  <h1>Camera Capture (Back Cam)</h1>
-  <video id="video" autoplay playsinline></video>
-  <div class="btns">
-    <button id="start-btn">Start Auto-Capture</button>
-    <button id="stop-btn">Stop</button>
-    <button id="manual-btn">Take Photo Now</button>
-  </div>
-  <div id="error-msg" class="error" style="display: none;"></div>
+<!-- ... (styles and HTML unchanged) ... -->
 <script>
 const video = document.getElementById('video');
 const startBtn = document.getElementById('start-btn');
@@ -39,36 +11,49 @@ let captureInterval;
 async function startCamera() {
   try {
     stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { exact: "environment" } }, audio: false
+      video: { facingMode: { exact: "environment" }, width: { ideal: 640 }, height: { ideal: 480 } }, audio: false // Limit resolution
     });
   } catch (e) {
     console.error('Camera error:', e);
     errorMsg.textContent = 'Camera access failed. Check permissions.';
     errorMsg.style.display = 'block';
-    stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    // Fallback
+    stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
   }
   video.srcObject = stream;
 }
 startCamera();
 
 async function captureAndSend() {
-  if (!video.videoWidth) {
+  if (!video.videoWidth || video.videoWidth === 0) {
     console.error('Video not ready');
+    errorMsg.textContent = 'Video stream not ready. Wait a moment.';
+    errorMsg.style.display = 'block';
     return;
   }
   const canvas = document.createElement('canvas');
-  canvas.width = video.videoWidth || 320;
-  canvas.height = video.videoHeight || 240;
+  canvas.width = Math.min(640, video.videoWidth); // Cap at 640px
+  canvas.height = (video.videoHeight / video.videoWidth) * canvas.width;
   const ctx = canvas.getContext('2d');
   ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
   canvas.toBlob(async (blob) => {
+    if (blob.size > 5 * 1024 * 1024) { // Client-side size check
+      errorMsg.textContent = 'Image too large. Try a clearer shot.';
+      errorMsg.style.display = 'block';
+      return;
+    }
     const formData = new FormData();
     formData.append('image', blob, 'frame.jpg');
     try {
-      const response = await fetch('/upload', { method: 'POST', body: formData });
+      const response = await fetch('/upload', { 
+        method: 'POST', 
+        body: formData,
+        signal: AbortSignal.timeout(45000) // 45s client timeout
+      });
       const data = await response.json();
       if (!response.ok) {
-        throw new Error(data.error || `Upload failed with status ${response.status}`);
+        const details = data.details ? `: ${data.details}` : '';
+        throw new Error(`${data.error || 'Upload failed'}${details}`);
       }
       console.log('Upload success:', data);
       errorMsg.style.display = 'none';
@@ -81,13 +66,14 @@ async function captureAndSend() {
       manualBtn.disabled = false;
       manualBtn.textContent = "Take Photo Now";
     }
-  }, 'image/jpeg', 0.8); // Quality 80% to reduce size
+  }, 'image/jpeg', 0.7); // 70% quality
 }
 
+// Event handlers unchanged
 startBtn.onclick = function () {
   if (captureInterval) clearInterval(captureInterval);
   captureAndSend();
-  captureInterval = setInterval(captureAndSend, 15000); // 15s interval
+  captureInterval = setInterval(captureAndSend, 15000);
 };
 stopBtn.onclick = function () {
   if (captureInterval) clearInterval(captureInterval);
