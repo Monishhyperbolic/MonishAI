@@ -5,13 +5,62 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Answers</title>
   <style>
-    body { background: #000; color: #fff; font-family: Arial, sans-serif; margin: 0; text-align: center;}
-    h1 { padding-top: 2vh;}
-    #answers { margin-top: 3vh; padding: 0 2vw;}
-    .answer-item { border: 1px solid #fff; border-radius: 4px; margin: 10px 0; padding: 14px; background: #111; text-align: left; max-width: 500px; margin-left: auto; margin-right: auto;}
-    .error { color: red; }
-    .no-data { color: #aaa; }
-    button { padding: 10px; background: #fff; color: #000; border: none; border-radius: 4px; cursor: pointer; }
+    body { 
+      background: #000; 
+      color: #fff; 
+      font-family: Arial, sans-serif; 
+      margin: 0; 
+      text-align: center;
+    }
+    h1 { 
+      padding-top: 2vh;
+    }
+    #answers { 
+      margin-top: 3vh; 
+      padding: 0 2vw;
+    }
+    .answer-item { 
+      border: 1px solid #fff; 
+      border-radius: 4px; 
+      margin: 10px 0; 
+      padding: 14px; 
+      background: #111; 
+      text-align: left; 
+      max-width: 500px; 
+      margin-left: auto; 
+      margin-right: auto;
+      line-height: 1.4;
+    }
+    .question {
+      color: #4CAF50;
+      font-weight: bold;
+      margin-bottom: 5px;
+    }
+    .answer {
+      color: #fff;
+      margin-bottom: 5px;
+    }
+    .timestamp {
+      color: #aaa;
+      font-size: 0.8em;
+    }
+    .error { 
+      color: red; 
+    }
+    .no-data { 
+      color: #aaa; 
+    }
+    button { 
+      padding: 10px; 
+      background: #fff; 
+      color: #000; 
+      border: none; 
+      border-radius: 4px; 
+      cursor: pointer; 
+    }
+    button:hover {
+      background: #f0f0f0;
+    }
   </style>
 </head>
 <body>
@@ -21,21 +70,45 @@
   <script>
     async function fetchAnswers() {
       try {
-        const response = await fetch('/answers', { cache: 'no-cache' }); // Bypass cache
+        const response = await fetch('/answers', { cache: 'no-cache' });
         if (!response.ok) {
           throw new Error(`HTTP error! Status: ${response.status}`);
         }
         const data = await response.json();
         const answersDiv = document.getElementById('answers');
         answersDiv.innerHTML = '';
-        if (data.length === 0) {
+        
+        if (!Array.isArray(data) || data.length === 0) {
           answersDiv.innerHTML = '<p class="no-data">No answers available yet.</p>';
+          return;
         }
+        
         data.forEach(item => {
-          const div = document.createElement('div');
-          div.className = 'answer-item';
-          div.textContent = `${item.timestamp.split('.')[0]}: ${item.answer}`;
-          answersDiv.appendChild(div);
+          // item is a string like "Question: ... Answer: ... Time: ..."
+          if (typeof item === 'string' && item.trim()) {
+            const div = document.createElement('div');
+            div.className = 'answer-item';
+            
+            // Parse the string to extract question, answer, and time
+            const parts = item.split(' Answer: ');
+            if (parts.length >= 2) {
+              const questionPart = parts[0].replace('Question: ', '');
+              const answerAndTime = parts[1].split(' Time: ');
+              const answerPart = answerAndTime[0];
+              const timePart = answerAndTime[1] || 'Unknown time';
+              
+              div.innerHTML = `
+                <div class="question">Q: ${questionPart}</div>
+                <div class="answer">A: ${answerPart}</div>
+                <div class="timestamp">${timePart}</div>
+              `;
+            } else {
+              // Fallback if format is unexpected
+              div.innerHTML = `<div class="answer">${item}</div>`;
+            }
+            
+            answersDiv.appendChild(div);
+          }
         });
       } catch (e) {
         console.error('Error fetching answers:', e);
@@ -43,8 +116,12 @@
         answersDiv.innerHTML = `<p class="error">Error fetching answers: ${e.message}. Try refreshing.</p>`;
       }
     }
+    
+    // Initial load
     fetchAnswers();
-    setInterval(fetchAnswers, 5000); // Poll every 5s
+    
+    // Auto-refresh every 5 seconds
+    setInterval(fetchAnswers, 5000);
   </script>
 </body>
 </html>
