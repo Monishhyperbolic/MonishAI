@@ -30,23 +30,27 @@ db.serialize(() => {
   db.run(`CREATE TABLE IF NOT EXISTS answers (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     answer TEXT,
+    question TEXT,
     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
   )`, (err) => {
     if (err) console.error('Error creating table:', err);
     else {
-      // After table is created, check/add 'question' column
-      db.get("PRAGMA table_info(answers)", (err, row) => {
-        if (err) return console.error('PRAGMA error:', err);
-        db.all("PRAGMA table_info(answers)", (e2, columns) => {
-          if (e2) return console.error('PRAGMA error:', e2);
-          const questionExists = columns.some(c => c.name === 'question');
-          if (!questionExists) {
-            db.run('ALTER TABLE answers ADD COLUMN question TEXT', (ae) => {
-              if (ae) console.error('Error adding question column:', ae.message);
-              else console.log("Database migrated: Added 'question' column");
-            });
-          }
-        });
+      db.all("PRAGMA table_info(answers)", (e2, columns) => {
+        if (e2) return console.error('PRAGMA error:', e2);
+        const questionExists = columns.some(c => c.name === 'question');
+        const answerExists = columns.some(c => c.name === 'answer');
+        if (!questionExists) {
+          db.run('ALTER TABLE answers ADD COLUMN question TEXT', (ae) => {
+            if (ae) console.error('Error adding question column:', ae.message);
+            else console.log("Database migrated: Added 'question' column");
+          });
+        }
+        if (!answerExists) {
+          db.run('ALTER TABLE answers ADD COLUMN answer TEXT', (ae) => {
+            if (ae) console.error('Error adding answer column:', ae.message);
+            else console.log("Database migrated: Added 'answer' column");
+          });
+        }
       });
     }
   });
@@ -97,10 +101,20 @@ app.post('/upload', upload.single('image'), async (req, res) => {
       body: JSON.stringify({
         model: "meta-llama/llama-4-scout-17b-16e-instruct",
         messages: [
-          { role: "user", content: [
-            { type: "text", text: "Analyze the image. If it contains a question (MCQ, fill-in-the-blank, or otherwise), return a JSON object like { \"question\": \"...\", \"answer\": \"...\" }. For MCQs, 'answer' must be the letter (A/B/C/D). For fill-in-the-blanks, only the exact answer. For code, only return the code in 'answer'. Do not include any explanation." },
-            { type: "image_url", image_url: { url: `data:image/jpeg;base64,${b64}` } }
-          ] }
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text:
+                  "Analyze the image. If it contains a question (of any type: MCQ, fill-in-the-blank, short answer, or code), extract the question and the answer in natural language as a JSON object: { \"question\": \"...\", \"answer\": \"...\" }. For MCQs, always give the answer as the full text of the correct option, not just a letter or number. For fill-in-the-blanks and descriptive questions, provide the exact answer or phrase. For code, include only the code in 'answer'. Do not include any choice labels, option letters, or explanations—only the content."
+              },
+              {
+                type: "image_url",
+                image_url: { url: `data:image/jpeg;base64,${b64}` }
+              }
+            ]
+          }
         ],
         max_tokens: 700
       })
@@ -143,16 +157,19 @@ app.post('/upload', upload.single('image'), async (req, res) => {
     const answer = (qnaObj.answer || '').trim();
     const question = (qnaObj.question || '').trim();
 
-    // Store in DB. Handles both legacy (answer only) and new (question & answer)
-    db.run('INSERT INTO answers (question, answer) VALUES (?, ?)', [question, answer], function (err) {
-      if (err) {
-        console.error('DB insert error:', err);
+    db.run(
+      'INSERT INTO answers (question, answer) VALUES (?, ?)',
+      [question, answer],
+      function (err) {
+        if (err) {
+          console.error('DB insert error:', err);
+          fs.unlinkSync(tempPath);
+          return res.status(500).json({ error: 'Database storage failed', details: err.message });
+        }
         fs.unlinkSync(tempPath);
-        return res.status(500).json({ error: 'Database storage failed', details: err.message });
+        res.json({ success: true, question, answer });
       }
-      fs.unlinkSync(tempPath);
-      res.json({ success: true, question, answer });
-    });
+    );
   } catch (err) {
     console.error('Upload processing error:', err.message);
     if (tempPath && fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
