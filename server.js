@@ -22,23 +22,37 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
   else console.log('Connected to SQLite database');
 });
 
-// Middleware
 app.use(cors());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Init DB
+// --- Schema migration: ensure table and columns exist ---
 db.serialize(() => {
   db.run(`CREATE TABLE IF NOT EXISTS answers (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    question TEXT,
     answer TEXT,
     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
   )`, (err) => {
     if (err) console.error('Error creating table:', err);
+    else {
+      // After table is created, check/add 'question' column
+      db.get("PRAGMA table_info(answers)", (err, row) => {
+        if (err) return console.error('PRAGMA error:', err);
+        db.all("PRAGMA table_info(answers)", (e2, columns) => {
+          if (e2) return console.error('PRAGMA error:', e2);
+          const questionExists = columns.some(c => c.name === 'question');
+          if (!questionExists) {
+            db.run('ALTER TABLE answers ADD COLUMN question TEXT', (ae) => {
+              if (ae) console.error('Error adding question column:', ae.message);
+              else console.log("Database migrated: Added 'question' column");
+            });
+          }
+        });
+      });
+    }
   });
 });
 
-// Upload endpoint
+// --- Upload endpoint ---
 app.post('/upload', upload.single('image'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
@@ -57,8 +71,6 @@ app.post('/upload', upload.single('image'), async (req, res) => {
       return res.status(400).json({ error: 'Image too large (max 10MB)' });
     }
     const b64 = imgBuffer.toString('base64');
-
-    // Validate base64
     if (!b64.startsWith('/9j/')) {
       fs.unlinkSync(tempPath);
       return res.status(400).json({ error: 'Invalid JPEG base64 encoding' });
@@ -68,16 +80,13 @@ app.post('/upload', upload.single('image'), async (req, res) => {
       fs.unlinkSync(tempPath);
       return res.status(500).json({ error: 'GROQ_API_KEY not configured' });
     }
-
     if (typeof fetch !== 'function') {
       fs.unlinkSync(tempPath);
       throw new Error('fetch is not a function - check node-fetch installation');
     }
 
-    // Groq API call
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 30000);
-
     const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       signal: controller.signal,
@@ -127,21 +136,20 @@ app.post('/upload', upload.single('image'), async (req, res) => {
     try {
       qnaObj = JSON.parse(rawContent);
     } catch {
-      // fallback: heuristic split or dump as plain answer if format wrong
+      // fallback: heuristically handle odd formats
       qnaObj = { question: '', answer: rawContent.trim() };
     }
 
-    const question = (qnaObj.question || '').trim();
     const answer = (qnaObj.answer || '').trim();
+    const question = (qnaObj.question || '').trim();
 
-    // Store in DB
+    // Store in DB. Handles both legacy (answer only) and new (question & answer)
     db.run('INSERT INTO answers (question, answer) VALUES (?, ?)', [question, answer], function (err) {
       if (err) {
         console.error('DB insert error:', err);
         fs.unlinkSync(tempPath);
         return res.status(500).json({ error: 'Database storage failed', details: err.message });
       }
-      console.log('Answer stored successfully, ID:', this.lastID);
       fs.unlinkSync(tempPath);
       res.json({ success: true, question, answer });
     });
@@ -152,7 +160,7 @@ app.post('/upload', upload.single('image'), async (req, res) => {
   }
 });
 
-// Answers API
+// --- Answers API ---
 app.get('/answers', (req, res) => {
   res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
   res.set('Pragma', 'no-cache');
@@ -162,12 +170,11 @@ app.get('/answers', (req, res) => {
       console.error('Error fetching answers:', err);
       return res.status(500).json({ error: err.message });
     }
-    console.log('Fetched answers count:', rows.length);
     res.json(rows);
   });
 });
 
-// Debug endpoints
+// --- Debug endpoints ---
 app.get('/debug/db', (req, res) => {
   db.all('SELECT * FROM answers ORDER BY id DESC LIMIT 5', (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
@@ -176,12 +183,15 @@ app.get('/debug/db', (req, res) => {
 });
 
 app.get('/debug/insert', (req, res) => {
-  db.run('INSERT INTO answers (question, answer) VALUES (?, ?)', ['Test Q', 'Test answer from debug'], function (err) {
-    if (err) return res.status(500).json({ error: err.message });
-    res.json({ message: 'Test answer inserted', rowId: this.lastID });
-  });
+  db.run(
+    'INSERT INTO answers (question, answer) VALUES (?, ?)',
+    ['Test Q', 'Test answer from debug'],
+    function (err) {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ message: 'Test answer inserted', rowId: this.lastID });
+    }
+  );
 });
 
-// Start server
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
