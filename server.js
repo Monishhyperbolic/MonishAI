@@ -30,6 +30,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 db.serialize(() => {
   db.run(`CREATE TABLE IF NOT EXISTS answers (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    question TEXT,
     answer TEXT,
     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
   )`, (err) => {
@@ -51,13 +52,11 @@ app.post('/upload', upload.single('image'), async (req, res) => {
 
     // Read image buffer and encode to base64
     const imgBuffer = fs.readFileSync(tempPath);
-    console.log('Image size (bytes):', imgBuffer.length);
     if (imgBuffer.length > 10 * 1024 * 1024) {
       fs.unlinkSync(tempPath);
       return res.status(400).json({ error: 'Image too large (max 10MB)' });
     }
     const b64 = imgBuffer.toString('base64');
-    console.log('Base64 prefix:', b64.substring(0, 20)); // Debug JPEG signature
 
     // Validate base64
     if (!b64.startsWith('/9j/')) {
@@ -78,6 +77,7 @@ app.post('/upload', upload.single('image'), async (req, res) => {
     // Groq API call
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 30000);
+
     const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       signal: controller.signal,
@@ -86,10 +86,10 @@ app.post('/upload', upload.single('image'), async (req, res) => {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model: "meta-llama/llama-4-scout-17b-16e-instruct", // Reliable vision model
+        model: "meta-llama/llama-4-scout-17b-16e-instruct",
         messages: [
           { role: "user", content: [
-            { type: "text", text: "Analyze the image. If it contains a multiple-choice question (MCQ), return only the letter of the correct option (e.g., 'A', 'B'). If it is a fill-in-the-blank question, return only the exact answer (e.g., '42'). If it contains code or pseudocode, return only the code block without explanations. Do not provide any additional text or explanations." },
+            { type: "text", text: "Analyze the image. If it contains a question (MCQ, fill-in-the-blank, or otherwise), return a JSON object like { \"question\": \"...\", \"answer\": \"...\" }. For MCQs, 'answer' must be the letter (A/B/C/D). For fill-in-the-blanks, only the exact answer. For code, only return the code in 'answer'. Do not include any explanation." },
             { type: "image_url", image_url: { url: `data:image/jpeg;base64,${b64}` } }
           ] }
         ],
@@ -121,22 +121,21 @@ app.post('/upload', upload.single('image'), async (req, res) => {
       throw new Error('Invalid JSON from Groq API');
     }
 
-    let answer = groqJson.choices?.[0]?.message?.content || 'No answer returned from Groq';
-    console.log('Groq API response summary:', answer.substring(0, 200) + '...');
-
-    // Basic cleanup: trim whitespace and remove extra text if present
-    answer = answer.trim();
-    // For MCQs, extract single letter if possible
-    if (/^[A-D]$/.test(answer)) {
-      // Valid MCQ option (A, B, C, D)
-    } else if (answer.includes('\n') && !answer.startsWith('```')) {
-      // For non-code answers, take first line to avoid verbose text
-      answer = answer.split('\n')[0].trim();
+    // Extract question and answer fields from Groq output
+    let qnaObj;
+    let rawContent = groqJson.choices?.[0]?.message?.content || '';
+    try {
+      qnaObj = JSON.parse(rawContent);
+    } catch {
+      // fallback: heuristic split or dump as plain answer if format wrong
+      qnaObj = { question: '', answer: rawContent.trim() };
     }
-    // Code blocks are preserved as-is (delimited by ```)
+
+    const question = (qnaObj.question || '').trim();
+    const answer = (qnaObj.answer || '').trim();
 
     // Store in DB
-    db.run('INSERT INTO answers (answer) VALUES (?)', [answer], function (err) {
+    db.run('INSERT INTO answers (question, answer) VALUES (?, ?)', [question, answer], function (err) {
       if (err) {
         console.error('DB insert error:', err);
         fs.unlinkSync(tempPath);
@@ -144,7 +143,7 @@ app.post('/upload', upload.single('image'), async (req, res) => {
       }
       console.log('Answer stored successfully, ID:', this.lastID);
       fs.unlinkSync(tempPath);
-      res.json({ success: true, answer: answer.substring(0, 100) + '...' });
+      res.json({ success: true, question, answer });
     });
   } catch (err) {
     console.error('Upload processing error:', err.message);
@@ -158,7 +157,7 @@ app.get('/answers', (req, res) => {
   res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
   res.set('Pragma', 'no-cache');
   res.set('Expires', '0');
-  db.all('SELECT answer, timestamp FROM answers ORDER BY timestamp DESC LIMIT 20', (err, rows) => {
+  db.all('SELECT question, answer, timestamp FROM answers ORDER BY timestamp DESC LIMIT 20', (err, rows) => {
     if (err) {
       console.error('Error fetching answers:', err);
       return res.status(500).json({ error: err.message });
@@ -177,7 +176,7 @@ app.get('/debug/db', (req, res) => {
 });
 
 app.get('/debug/insert', (req, res) => {
-  db.run('INSERT INTO answers (answer) VALUES (?)', ['Test answer from debug'], function (err) {
+  db.run('INSERT INTO answers (question, answer) VALUES (?, ?)', ['Test Q', 'Test answer from debug'], function (err) {
     if (err) return res.status(500).json({ error: err.message });
     res.json({ message: 'Test answer inserted', rowId: this.lastID });
   });
