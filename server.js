@@ -11,7 +11,6 @@ const app = express();
 const UPLOADS_DIR = '/data/uploads';
 const DB_PATH = '/data/answers.db';
 
-// Ensure upload directory exists
 if (!fs.existsSync(UPLOADS_DIR)) {
   fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 }
@@ -25,7 +24,7 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
 app.use(cors());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Ensure DB columns exist
+// Schema init/migration
 db.serialize(() => {
   db.run(`CREATE TABLE IF NOT EXISTS answers (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -98,7 +97,7 @@ app.post('/upload', upload.single('image'), async (req, res) => {
               {
                 type: "text",
                 text:
-                  "Analyze the image. For every question (MCQ, fill-in, descriptive, code, etc.), return ONLY a JSON array, each object like {\"question\": \"<question text>\", \"answer\": \"<answer text>\"}. Do not include any other text, explanation, markdown, code block, or formatting—just the array."
+                  "Analyze the image. For every question (MCQ, fill-in, descriptive, code, etc.), return ONLY a JSON array, each object like {\"question\": \"<question text>\", \"answer\": \"<answer text>\"}. No other text, markdown, or code block."
               },
               {
                 type: "image_url",
@@ -162,9 +161,12 @@ app.get('/answers', (req, res) => {
     if (err) {
       return res.status(500).json({ error: 'Server error while fetching answers.' });
     }
-    res.json(rows.map(row =>
-      `Question: ${row.question ? row.question : 'N/A'} Answer: ${row.answer ? row.answer : 'N/A'} Time: ${row.timestamp ? row.timestamp : 'N/A'}`
-    ));
+    res.json(rows.map(row => {
+      const question = row.question && typeof row.question === "string" ? row.question : "N/A";
+      const answer = row.answer && typeof row.answer === "string" ? row.answer : "N/A";
+      const timestamp = row.timestamp && typeof row.timestamp === "string" ? row.timestamp : "N/A";
+      return `Question: ${question} Answer: ${answer} Time: ${timestamp}`;
+    }));
   });
 });
 
