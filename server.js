@@ -52,12 +52,10 @@ db.serialize(() => {
   });
 });
 
-// Upload endpoint
 app.post('/upload', upload.single('image'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   let tempPath = req.file.path;
   try {
-    // Validate image
     if (!req.file.mimetype.startsWith('image/jpeg')) {
       fs.unlinkSync(tempPath);
       return res.status(400).json({ error: 'Only JPEG images are supported' });
@@ -81,7 +79,6 @@ app.post('/upload', upload.single('image'), async (req, res) => {
       throw new Error('fetch is not a function - check node-fetch installation');
     }
 
-    // New prompt: return ONLY a clean JSON array, with question and answer
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 30000);
 
@@ -101,7 +98,7 @@ app.post('/upload', upload.single('image'), async (req, res) => {
               {
                 type: "text",
                 text:
-                  "Analyze the image. For every question (MCQ, fill-in, descriptive, code, etc.), return ONLY a JSON array, one object per question, in this format: [{\"question\": \"<question text>\", \"answer\": \"<answer text>\"}]. Do not include any other text, explanation, markdown, code block, or formatting—just the array."
+                  "Analyze the image. For every question (MCQ, fill-in, descriptive, code, etc.), return ONLY a JSON array, each object like {\"question\": \"<question text>\", \"answer\": \"<answer text>\"}. Do not include any other text, explanation, markdown, code block, or formatting—just the array."
               },
               {
                 type: "image_url",
@@ -121,7 +118,6 @@ app.post('/upload', upload.single('image'), async (req, res) => {
       return res.status(500).json({ error: `Groq API failed: ${groqRes.status}`, details: responseText });
     }
 
-    // Parse and validate the JSON
     let qnaArray = [];
     try {
       const groqJson = JSON.parse(responseText);
@@ -133,12 +129,13 @@ app.post('/upload', upload.single('image'), async (req, res) => {
       return res.status(500).json({ error: 'Invalid JSON from Groq', details: err?.message || err });
     }
 
-    // Filter and format
     qnaArray = qnaArray
       .filter(obj => obj && typeof obj === 'object' && obj.answer && obj.question)
-      .map(obj => ({ question: obj.question.trim(), answer: obj.answer.trim() }));
+      .map(obj => ({
+        question: obj.question.trim(),
+        answer: obj.answer.trim()
+      }));
 
-    // Store in DB
     qnaArray.forEach(({ question, answer }) => {
       db.run(
         'INSERT INTO answers (question, answer) VALUES (?, ?)',
@@ -147,7 +144,13 @@ app.post('/upload', upload.single('image'), async (req, res) => {
     });
 
     fs.unlinkSync(tempPath);
-    res.json({ count: qnaArray.length, questions: qnaArray });
+    // Returns: Array of "Question: ... Answer: ..." string
+    res.json({
+      count: qnaArray.length,
+      questions: qnaArray.map(q =>
+        `Question: ${q.question} Answer: ${q.answer}`
+      )
+    });
   } catch (err) {
     if (tempPath && fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
     res.status(500).json({ error: 'Server error', details: err.message });
@@ -160,11 +163,10 @@ app.get('/answers', (req, res) => {
     if (err) {
       return res.status(500).json({ error: 'Server error while fetching answers.' });
     }
-    res.json(rows.map(row => ({
-      question: row.question,
-      answer: row.answer,
-      timestamp: row.timestamp
-    })));
+    // Output: Array of "Question: ... Answer: ..." strings
+    res.json(rows.map(row =>
+      `Question: ${row.question} Answer: ${row.answer} Time: ${row.timestamp}`
+    ));
   });
 });
 
