@@ -25,7 +25,7 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
 app.use(cors());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// --- Schema migration ---
+// Schema migration: ensure table and columns exist
 db.serialize(() => {
   db.run(`CREATE TABLE IF NOT EXISTS answers (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -54,33 +54,30 @@ db.serialize(() => {
   });
 });
 
-// --- Upload endpoint ---
+// Upload endpoint
 app.post('/upload', upload.single('image'), async (req, res) => {
-  if (!req.file) return res.status(400).send('No file uploaded');
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
   let tempPath = req.file.path;
   try {
     // Validate image
     if (!req.file.mimetype.startsWith('image/jpeg')) {
       fs.unlinkSync(tempPath);
-      return res.status(400).send('Only JPEG images are supported');
+      return res.status(400).json({ error: 'Only JPEG images are supported' });
     }
-
-    // Read image buffer and encode to base64
     const imgBuffer = fs.readFileSync(tempPath);
     if (imgBuffer.length > 10 * 1024 * 1024) {
       fs.unlinkSync(tempPath);
-      return res.status(400).send('Image too large (max 10MB)');
+      return res.status(400).json({ error: 'Image too large (max 10MB)' });
     }
     const b64 = imgBuffer.toString('base64');
     if (!b64.startsWith('/9j/')) {
       fs.unlinkSync(tempPath);
-      return res.status(400).send('Invalid JPEG base64 encoding');
+      return res.status(400).json({ error: 'Invalid JPEG base64 encoding' });
     }
-
     if (!process.env.GROQ_API_KEY) {
       fs.unlinkSync(tempPath);
-      return res.status(500).send('GROQ_API_KEY not configured');
+      return res.status(500).json({ error: 'GROQ_API_KEY not configured' });
     }
     if (typeof fetch !== 'function') {
       fs.unlinkSync(tempPath);
@@ -126,21 +123,17 @@ app.post('/upload', upload.single('image'), async (req, res) => {
       fs.unlinkSync(tempPath);
       throw new Error(`Failed to read Groq response: ${readErr.message}`);
     }
-
     if (!groqRes.ok) {
       fs.unlinkSync(tempPath);
-      return res.status(500).send(`Groq API failed: ${groqRes.status}\n${responseText}`);
+      return res.status(500).json({ error: `Groq API failed: ${groqRes.status}`, details: responseText });
     }
-
     let groqJson;
     try {
       groqJson = JSON.parse(responseText);
     } catch {
       fs.unlinkSync(tempPath);
-      return res.status(500).send('Invalid response from Groq API');
+      return res.status(500).json({ error: 'Invalid response from Groq API' });
     }
-
-    // Extract question and answer fields from Groq output
     let qnaObj;
     let rawContent = groqJson.choices?.[0]?.message?.content || '';
     try {
@@ -148,7 +141,6 @@ app.post('/upload', upload.single('image'), async (req, res) => {
     } catch {
       qnaObj = { question: '', answer: rawContent.trim() };
     }
-
     const answer = (qnaObj.answer || '').trim();
     const question = (qnaObj.question || '').trim();
 
@@ -157,41 +149,33 @@ app.post('/upload', upload.single('image'), async (req, res) => {
       [question, answer],
       function (err) {
         fs.unlinkSync(tempPath);
-        if (err) return res.status(500).send('Database storage failed.');
-        // Return nicely formatted single answer
-        res.set('Content-Type', 'text/plain');
-        res.send(
-          `Question: ${question || 'N/A'}\nAnswer: ${answer || 'N/A'}`
-        );
+        if (err) return res.status(500).json({ error: 'Database storage failed.' });
+        res.json({ success: true, question, answer });
       }
     );
   } catch (err) {
     if (tempPath && fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
-    res.status(500).send(`Server error: ${err.message}`);
+    res.status(500).json({ error: 'Server error', details: err.message });
   }
 });
 
-// --- Answers API (returns plain text) ---
+// Answers API
 app.get('/answers', (req, res) => {
   res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
   res.set('Pragma', 'no-cache');
   res.set('Expires', '0');
   db.all('SELECT question, answer, timestamp FROM answers ORDER BY timestamp DESC LIMIT 20', (err, rows) => {
     if (err) {
-      return res.status(500).send('Server error while fetching answers.');
+      return res.status(500).json({ error: 'Server error while fetching answers.' });
     }
-    let output = rows.map(row =>
-      `Question: ${row.question || 'N/A'}\nAnswer: ${row.answer || 'N/A'}\nTime: ${row.timestamp}\n`
-    ).join('\n-------------------\n');
-    res.set('Content-Type', 'text/plain');
-    res.send(output);
+    res.json(rows);
   });
 });
 
-// --- Debug endpoints ---
+// Debug endpoints
 app.get('/debug/db', (req, res) => {
   db.all('SELECT * FROM answers ORDER BY id DESC LIMIT 5', (err, rows) => {
-    if (err) return res.status(500).send('Debug endpoint error');
+    if (err) return res.status(500).json({ error: 'Debug endpoint error' });
     res.json(rows);
   });
 });
@@ -201,7 +185,7 @@ app.get('/debug/insert', (req, res) => {
     'INSERT INTO answers (question, answer) VALUES (?, ?)',
     ['Test Q', 'Test answer from debug'],
     function (err) {
-      if (err) return res.status(500).send('Debug endpoint error');
+      if (err) return res.status(500).json({ error: 'Debug endpoint error' });
       res.json({ message: 'Test answer inserted', rowId: this.lastID });
     }
   );
