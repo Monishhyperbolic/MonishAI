@@ -11,6 +11,7 @@ const app = express();
 const UPLOADS_DIR = '/data/uploads';
 const DB_PATH = '/data/answers.db';
 
+// Ensure upload directory exists
 if (!fs.existsSync(UPLOADS_DIR)) {
   fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 }
@@ -24,7 +25,7 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
 app.use(cors());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Schema init/migration
+// Defensive DB migration
 db.serialize(() => {
   db.run(`CREATE TABLE IF NOT EXISTS answers (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -35,14 +36,13 @@ db.serialize(() => {
     if (err) return console.error('Table create error:', err);
     db.all("PRAGMA table_info(answers)", (e2, columns) => {
       if (e2) return console.error('PRAGMA error:', e2);
-      const questionExists = columns.some(c => c.name === 'question');
-      const answerExists = columns.some(c => c.name === 'answer');
-      if (!questionExists) {
+      const names = columns.map(c => c.name);
+      if (!names.includes('question')) {
         db.run('ALTER TABLE answers ADD COLUMN question TEXT', ae => {
           if (ae) console.error('Error adding question column:', ae.message);
         });
       }
-      if (!answerExists) {
+      if (!names.includes('answer')) {
         db.run('ALTER TABLE answers ADD COLUMN answer TEXT', ae => {
           if (ae) console.error('Error adding answer column:', ae.message);
         });
@@ -52,7 +52,9 @@ db.serialize(() => {
 });
 
 app.post('/upload', upload.single('image'), async (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  if (!req.file) {
+    return res.status(400).json({ error: 'No file uploaded' });
+  }
   let tempPath = req.file.path;
   try {
     if (!req.file.mimetype.startsWith('image/jpeg')) {
@@ -96,8 +98,7 @@ app.post('/upload', upload.single('image'), async (req, res) => {
             content: [
               {
                 type: "text",
-                text:
-                  "Analyze the image. For every question (MCQ, fill-in, descriptive, code, etc.), return ONLY a JSON array, each object like {\"question\": \"<question text>\", \"answer\": \"<answer text>\"}. No other text, markdown, or code block."
+                text: `Analyze the image. For every question (MCQ, fill-in, descriptive, code, etc.), return ONLY a JSON array, each object like {"question": "...", "answer": "..."}. No other text, markdown, or code block.`
               },
               {
                 type: "image_url",
@@ -116,7 +117,6 @@ app.post('/upload', upload.single('image'), async (req, res) => {
       fs.unlinkSync(tempPath);
       return res.status(500).json({ error: `Groq API failed: ${groqRes.status}`, details: responseText });
     }
-
     let qnaArray = [];
     try {
       const groqJson = JSON.parse(responseText);
@@ -127,12 +127,11 @@ app.post('/upload', upload.single('image'), async (req, res) => {
       fs.unlinkSync(tempPath);
       return res.status(500).json({ error: 'Invalid JSON from Groq', details: err?.message || err });
     }
-
     qnaArray = qnaArray
       .filter(obj => obj && typeof obj === 'object')
       .map(obj => ({
-        question: (obj.question && typeof obj.question === 'string') ? obj.question.trim() : 'N/A',
-        answer: (obj.answer && typeof obj.answer === 'string') ? obj.answer.trim() : 'N/A'
+        question: (obj.question && typeof obj.question === 'string' && obj.question.trim()) || 'N/A',
+        answer: (obj.answer && typeof obj.answer === 'string' && obj.answer.trim()) || 'N/A'
       }));
 
     qnaArray.forEach(({ question, answer }) => {
@@ -143,7 +142,6 @@ app.post('/upload', upload.single('image'), async (req, res) => {
     });
 
     fs.unlinkSync(tempPath);
-
     res.json({
       count: qnaArray.length,
       results: qnaArray.map(q =>
@@ -162,9 +160,9 @@ app.get('/answers', (req, res) => {
       return res.status(500).json({ error: 'Server error while fetching answers.' });
     }
     res.json(rows.map(row => {
-      const question = row.question && typeof row.question === "string" ? row.question : "N/A";
-      const answer = row.answer && typeof row.answer === "string" ? row.answer : "N/A";
-      const timestamp = row.timestamp && typeof row.timestamp === "string" ? row.timestamp : "N/A";
+      const question = (row && typeof row.question === "string" && row.question.trim()) || "N/A";
+      const answer = (row && typeof row.answer === "string" && row.answer.trim()) || "N/A";
+      const timestamp = (row && typeof row.timestamp === "string" && row.timestamp.trim()) || "N/A";
       return `Question: ${question} Answer: ${answer} Time: ${timestamp}`;
     }));
   });
