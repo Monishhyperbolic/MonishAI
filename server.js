@@ -11,29 +11,27 @@ const app = express();
 const UPLOADS_DIR = '/data/uploads';
 const DB_PATH = '/data/answers.db';
 
-// Ensure upload directory exists
 if (!fs.existsSync(UPLOADS_DIR)) {
   fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 }
 
 const upload = multer({ dest: UPLOADS_DIR });
 const db = new sqlite3.Database(DB_PATH, (err) => {
-  if (err) console.error('Error connecting to database:', err);
+  if (err) console.error('Database connect error:', err);
   else console.log('Connected to SQLite database');
 });
 
 app.use(cors());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Schema migration: ensure table and columns exist
 db.serialize(() => {
   db.run(`CREATE TABLE IF NOT EXISTS answers (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    answer TEXT,
     question TEXT,
+    answer TEXT,
     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
   )`, err => {
-    if (err) return console.error('Error creating table:', err);
+    if (err) return console.error('Table create error:', err);
     db.all("PRAGMA table_info(answers)", (e2, columns) => {
       if (e2) return console.error('PRAGMA error:', e2);
       const questionExists = columns.some(c => c.name === 'question');
@@ -41,23 +39,20 @@ db.serialize(() => {
       if (!questionExists) {
         db.run('ALTER TABLE answers ADD COLUMN question TEXT', ae => {
           if (ae) console.error('Error adding question column:', ae.message);
-          else console.log("Database migrated: Added 'question' column");
         });
       }
       if (!answerExists) {
         db.run('ALTER TABLE answers ADD COLUMN answer TEXT', ae => {
           if (ae) console.error('Error adding answer column:', ae.message);
-          else console.log("Database migrated: Added 'answer' column");
         });
       }
     });
   });
 });
 
-// Upload endpoint
+// --- Upload endpoint ---
 app.post('/upload', upload.single('image'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-
   let tempPath = req.file.path;
   try {
     // Validate image
@@ -73,7 +68,7 @@ app.post('/upload', upload.single('image'), async (req, res) => {
     const b64 = imgBuffer.toString('base64');
     if (!b64.startsWith('/9j/')) {
       fs.unlinkSync(tempPath);
-      return res.status(400).json({ error: 'Invalid JPEG base64 encoding' });
+      return res.status(400).json({ error: 'Invalid JPEG base64' });
     }
     if (!process.env.GROQ_API_KEY) {
       fs.unlinkSync(tempPath);
@@ -84,8 +79,10 @@ app.post('/upload', upload.single('image'), async (req, res) => {
       throw new Error('fetch is not a function - check node-fetch installation');
     }
 
+    // Improved prompt for only array of Q&A objects, nothing else:
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 30000);
+
     const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       signal: controller.signal,
@@ -102,7 +99,7 @@ app.post('/upload', upload.single('image'), async (req, res) => {
               {
                 type: "text",
                 text:
-                  "Analyze the image. If it contains a question (of any type: MCQ, fill-in-the-blank, short answer, or code), extract the question and the answer in natural language as a JSON object: { \"question\": \"...\", \"answer\": \"...\" }. For MCQs, always give the answer as the full text of the correct option, not just a letter or number. For fill-in-the-blanks and descriptive questions, provide the exact answer or phrase. For code, include only the code in 'answer'. Do not include any choice labels, option letters, or explanations—only the content."
+                  "Analyze the image. If it contains one or more questions (MCQ, fill-in-the-blank, code, or reasoning), return ONLY a JSON array of objects, one per question, in the form [{\"question\":\"...\",\"answer\":\"...\"}]. Do not include any explanations, reasoning, steps, markdown, or code blocks. Your entire output MUST be a valid JSON array and nothing else."
               },
               {
                 type: "image_url",
@@ -116,54 +113,52 @@ app.post('/upload', upload.single('image'), async (req, res) => {
     });
     clearTimeout(timeoutId);
 
-    let responseText;
-    try {
-      responseText = await groqRes.text();
-    } catch (readErr) {
-      fs.unlinkSync(tempPath);
-      throw new Error(`Failed to read Groq response: ${readErr.message}`);
-    }
+    let responseText = await groqRes.text();
     if (!groqRes.ok) {
       fs.unlinkSync(tempPath);
       return res.status(500).json({ error: `Groq API failed: ${groqRes.status}`, details: responseText });
     }
-    let groqJson;
-    try {
-      groqJson = JSON.parse(responseText);
-    } catch {
-      fs.unlinkSync(tempPath);
-      return res.status(500).json({ error: 'Invalid response from Groq API' });
-    }
-    let qnaObj;
-    let rawContent = groqJson.choices?.[0]?.message?.content || '';
-    try {
-      qnaObj = JSON.parse(rawContent);
-    } catch {
-      qnaObj = { question: '', answer: rawContent.trim() };
-    }
-    const answer = (qnaObj.answer || '').trim();
-    const question = (qnaObj.question || '').trim();
 
-    db.run(
-      'INSERT INTO answers (question, answer) VALUES (?, ?)',
-      [question, answer],
-      function (err) {
-        fs.unlinkSync(tempPath);
-        if (err) return res.status(500).json({ error: 'Database storage failed.' });
-        res.json({ success: true, question, answer });
-      }
-    );
+    // Expect a JSON array string!
+    let qnaArray = [];
+    try {
+      const groqJson = JSON.parse(responseText);
+      let rawContent = groqJson.choices?.[0]?.message?.content || '';
+      // Defensive handling: sometimes model might return object instead of array
+      qnaArray = JSON.parse(rawContent);
+      if (!Array.isArray(qnaArray)) qnaArray = [qnaArray];
+    } catch (err) {
+      fs.unlinkSync(tempPath);
+      return res.status(500).json({ error: 'Invalid JSON output from Groq or parsing error', details: err?.message || err });
+    }
+
+    // Keep only valid objects with non-empty answer/question
+    qnaArray = qnaArray
+      .filter(obj => obj && typeof obj === 'object' && obj.answer && obj.question)
+      .map(obj => ({ question: obj.question.trim(), answer: obj.answer.trim() }));
+
+    // Insert into DB
+    let successCount = 0;
+    qnaArray.forEach(({ question, answer }) => {
+      db.run(
+        'INSERT INTO answers (question, answer) VALUES (?, ?)',
+        [question, answer],
+        function (err) {
+          if (!err) successCount += 1;
+        }
+      );
+    });
+
+    fs.unlinkSync(tempPath);
+    res.json({ count: qnaArray.length, questions: qnaArray });
   } catch (err) {
     if (tempPath && fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
     res.status(500).json({ error: 'Server error', details: err.message });
   }
 });
 
-// Answers API
+// --- Recent answers API ---
 app.get('/answers', (req, res) => {
-  res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
-  res.set('Pragma', 'no-cache');
-  res.set('Expires', '0');
   db.all('SELECT question, answer, timestamp FROM answers ORDER BY timestamp DESC LIMIT 20', (err, rows) => {
     if (err) {
       return res.status(500).json({ error: 'Server error while fetching answers.' });
@@ -172,14 +167,13 @@ app.get('/answers', (req, res) => {
   });
 });
 
-// Debug endpoints
+// --- Debug endpoints ---
 app.get('/debug/db', (req, res) => {
   db.all('SELECT * FROM answers ORDER BY id DESC LIMIT 5', (err, rows) => {
     if (err) return res.status(500).json({ error: 'Debug endpoint error' });
     res.json(rows);
   });
 });
-
 app.get('/debug/insert', (req, res) => {
   db.run(
     'INSERT INTO answers (question, answer) VALUES (?, ?)',
