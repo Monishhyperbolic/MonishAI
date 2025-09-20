@@ -11,7 +11,7 @@ const app = express();
 const UPLOADS_DIR = '/data/uploads';
 const DB_PATH = '/data/answers.db';
 
-// --- Ensure upload directory exists ---
+// Ensure upload directory exists
 if (!fs.existsSync(UPLOADS_DIR)) {
   fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 }
@@ -25,7 +25,7 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
 app.use(cors());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// --- Schema migration for question/answer columns ---
+// Ensure DB columns exist
 db.serialize(() => {
   db.run(`CREATE TABLE IF NOT EXISTS answers (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -52,7 +52,7 @@ db.serialize(() => {
   });
 });
 
-// --- Upload endpoint ---
+// Upload endpoint
 app.post('/upload', upload.single('image'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   let tempPath = req.file.path;
@@ -81,7 +81,7 @@ app.post('/upload', upload.single('image'), async (req, res) => {
       throw new Error('fetch is not a function - check node-fetch installation');
     }
 
-    // Prompt: return ONLY a JSON array, with each object including question and answer
+    // New prompt: return ONLY a clean JSON array, with question and answer
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 30000);
 
@@ -101,7 +101,7 @@ app.post('/upload', upload.single('image'), async (req, res) => {
               {
                 type: "text",
                 text:
-                  "Analyze the image. If it contains one or more questions (MCQ, fill-in-the-blank, code, or reasoning), return ONLY a JSON array of objects, each with \"question\" and \"answer\": [{\"question\": \"...\", \"answer\": \"...\"}]. Do not include any explanations, steps, markdown, or code blocks. Your entire output MUST be a valid JSON array and nothing else."
+                  "Analyze the image. For every question (MCQ, fill-in, descriptive, code, etc.), return ONLY a JSON array, one object per question, in this format: [{\"question\": \"<question text>\", \"answer\": \"<answer text>\"}]. Do not include any other text, explanation, markdown, code block, or formatting—just the array."
               },
               {
                 type: "image_url",
@@ -121,7 +121,7 @@ app.post('/upload', upload.single('image'), async (req, res) => {
       return res.status(500).json({ error: `Groq API failed: ${groqRes.status}`, details: responseText });
     }
 
-    // Parse the output as a JSON array of question/answer objects
+    // Parse and validate the JSON
     let qnaArray = [];
     try {
       const groqJson = JSON.parse(responseText);
@@ -133,12 +133,12 @@ app.post('/upload', upload.single('image'), async (req, res) => {
       return res.status(500).json({ error: 'Invalid JSON from Groq', details: err?.message || err });
     }
 
-    // Filter out any malformed objects
+    // Filter and format
     qnaArray = qnaArray
       .filter(obj => obj && typeof obj === 'object' && obj.answer && obj.question)
       .map(obj => ({ question: obj.question.trim(), answer: obj.answer.trim() }));
 
-    // Insert all found Q&A objects into DB
+    // Store in DB
     qnaArray.forEach(({ question, answer }) => {
       db.run(
         'INSERT INTO answers (question, answer) VALUES (?, ?)',
@@ -154,13 +154,12 @@ app.post('/upload', upload.single('image'), async (req, res) => {
   }
 });
 
-// --- Recent answers API ---
+// Answers endpoint
 app.get('/answers', (req, res) => {
   db.all('SELECT question, answer, timestamp FROM answers ORDER BY timestamp DESC LIMIT 20', (err, rows) => {
     if (err) {
       return res.status(500).json({ error: 'Server error while fetching answers.' });
     }
-    // Only send fields question and answer for each row, plus timestamp
     res.json(rows.map(row => ({
       question: row.question,
       answer: row.answer,
@@ -169,13 +168,14 @@ app.get('/answers', (req, res) => {
   });
 });
 
-// --- Debug endpoints ---
+// Debug endpoints
 app.get('/debug/db', (req, res) => {
   db.all('SELECT * FROM answers ORDER BY id DESC LIMIT 5', (err, rows) => {
-    if (err) return res.status(500).json({ error: 'Debug endpoint error' });
+    if (err) return res.status(500).json({ error: 'DB debug error' });
     res.json(rows);
   });
 });
+
 app.get('/debug/insert', (req, res) => {
   db.run(
     'INSERT INTO answers (question, answer) VALUES (?, ?)',
