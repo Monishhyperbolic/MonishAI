@@ -130,10 +130,10 @@ app.post('/upload', upload.single('image'), async (req, res) => {
     }
 
     qnaArray = qnaArray
-      .filter(obj => obj && typeof obj === 'object' && obj.answer && obj.question)
+      .filter(obj => obj && typeof obj === 'object')
       .map(obj => ({
-        question: obj.question.trim(),
-        answer: obj.answer.trim()
+        question: (obj.question && typeof obj.question === 'string') ? obj.question.trim() : 'N/A',
+        answer: (obj.answer && typeof obj.answer === 'string') ? obj.answer.trim() : 'N/A'
       }));
 
     qnaArray.forEach(({ question, answer }) => {
@@ -144,10 +144,10 @@ app.post('/upload', upload.single('image'), async (req, res) => {
     });
 
     fs.unlinkSync(tempPath);
-    // Returns: Array of "Question: ... Answer: ..." string
+
     res.json({
       count: qnaArray.length,
-      questions: qnaArray.map(q =>
+      results: qnaArray.map(q =>
         `Question: ${q.question} Answer: ${q.answer}`
       )
     });
@@ -157,15 +157,13 @@ app.post('/upload', upload.single('image'), async (req, res) => {
   }
 });
 
-// Answers endpoint
 app.get('/answers', (req, res) => {
   db.all('SELECT question, answer, timestamp FROM answers ORDER BY timestamp DESC LIMIT 20', (err, rows) => {
     if (err) {
       return res.status(500).json({ error: 'Server error while fetching answers.' });
     }
-    // Output: Array of "Question: ... Answer: ..." strings
     res.json(rows.map(row =>
-      `Question: ${row.question} Answer: ${row.answer} Time: ${row.timestamp}`
+      `Question: ${row.question ? row.question : 'N/A'} Answer: ${row.answer ? row.answer : 'N/A'} Time: ${row.timestamp ? row.timestamp : 'N/A'}`
     ));
   });
 });
