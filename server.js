@@ -11,6 +11,7 @@ const app = express();
 const UPLOADS_DIR = '/data/uploads';
 const DB_PATH = '/data/answers.db';
 
+// --- Ensure upload directory exists ---
 if (!fs.existsSync(UPLOADS_DIR)) {
   fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 }
@@ -24,6 +25,7 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
 app.use(cors());
 app.use(express.static(path.join(__dirname, 'public')));
 
+// --- Schema migration for question/answer columns ---
 db.serialize(() => {
   db.run(`CREATE TABLE IF NOT EXISTS answers (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -79,7 +81,7 @@ app.post('/upload', upload.single('image'), async (req, res) => {
       throw new Error('fetch is not a function - check node-fetch installation');
     }
 
-    // Improved prompt for only array of Q&A objects, nothing else:
+    // Prompt: return ONLY a JSON array, with each object including question and answer
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 30000);
 
@@ -99,7 +101,7 @@ app.post('/upload', upload.single('image'), async (req, res) => {
               {
                 type: "text",
                 text:
-                  "Analyze the image. If it contains one or more questions (MCQ, fill-in-the-blank, code, or reasoning), return ONLY a JSON array of objects, one per question, in the form [{\"question\":\"...\",\"answer\":\"...\"}]. Do not include any explanations, reasoning, steps, markdown, or code blocks. Your entire output MUST be a valid JSON array and nothing else."
+                  "Analyze the image. If it contains one or more questions (MCQ, fill-in-the-blank, code, or reasoning), return ONLY a JSON array of objects, each with \"question\" and \"answer\": [{\"question\": \"...\", \"answer\": \"...\"}]. Do not include any explanations, steps, markdown, or code blocks. Your entire output MUST be a valid JSON array and nothing else."
               },
               {
                 type: "image_url",
@@ -119,33 +121,28 @@ app.post('/upload', upload.single('image'), async (req, res) => {
       return res.status(500).json({ error: `Groq API failed: ${groqRes.status}`, details: responseText });
     }
 
-    // Expect a JSON array string!
+    // Parse the output as a JSON array of question/answer objects
     let qnaArray = [];
     try {
       const groqJson = JSON.parse(responseText);
       let rawContent = groqJson.choices?.[0]?.message?.content || '';
-      // Defensive handling: sometimes model might return object instead of array
       qnaArray = JSON.parse(rawContent);
       if (!Array.isArray(qnaArray)) qnaArray = [qnaArray];
     } catch (err) {
       fs.unlinkSync(tempPath);
-      return res.status(500).json({ error: 'Invalid JSON output from Groq or parsing error', details: err?.message || err });
+      return res.status(500).json({ error: 'Invalid JSON from Groq', details: err?.message || err });
     }
 
-    // Keep only valid objects with non-empty answer/question
+    // Filter out any malformed objects
     qnaArray = qnaArray
       .filter(obj => obj && typeof obj === 'object' && obj.answer && obj.question)
       .map(obj => ({ question: obj.question.trim(), answer: obj.answer.trim() }));
 
-    // Insert into DB
-    let successCount = 0;
+    // Insert all found Q&A objects into DB
     qnaArray.forEach(({ question, answer }) => {
       db.run(
         'INSERT INTO answers (question, answer) VALUES (?, ?)',
-        [question, answer],
-        function (err) {
-          if (!err) successCount += 1;
-        }
+        [question, answer]
       );
     });
 
@@ -163,7 +160,12 @@ app.get('/answers', (req, res) => {
     if (err) {
       return res.status(500).json({ error: 'Server error while fetching answers.' });
     }
-    res.json(rows);
+    // Only send fields question and answer for each row, plus timestamp
+    res.json(rows.map(row => ({
+      question: row.question,
+      answer: row.answer,
+      timestamp: row.timestamp
+    })));
   });
 });
 
