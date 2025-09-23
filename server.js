@@ -73,7 +73,7 @@ app.post('/upload', upload.single('image'), async (req, res) => {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model: "sonar-medium-chat",
+        model: "sonar-reasoning-pro",
         messages: [
           {
             role: "user",
