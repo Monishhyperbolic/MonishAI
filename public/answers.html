@@ -84,31 +84,14 @@
         }
         
         data.forEach(item => {
-          // item is a string like "Question: ... Answer: ... Time: ..."
-          if (typeof item === 'string' && item.trim()) {
-            const div = document.createElement('div');
-            div.className = 'answer-item';
-            
-            // Parse the string to extract question, answer, and time
-            const parts = item.split(' Answer: ');
-            if (parts.length >= 2) {
-              const questionPart = parts[0].replace('Question: ', '');
-              const answerAndTime = parts[1].split(' Time: ');
-              const answerPart = answerAndTime[0];
-              const timePart = answerAndTime[1] || 'Unknown time';
-              
-              div.innerHTML = `
-                <div class="question">Q: ${questionPart}</div>
-                <div class="answer">A: ${answerPart}</div>
-                <div class="timestamp">${timePart}</div>
-              `;
-            } else {
-              // Fallback if format is unexpected
-              div.innerHTML = `<div class="answer">${item}</div>`;
-            }
-            
-            answersDiv.appendChild(div);
-          }
+          const div = document.createElement('div');
+          div.className = 'answer-item';
+          div.innerHTML = `
+            <div class="question">Q: ${item.question}</div>
+            <div class="answer">A: ${item.answer}</div>
+            <div class="timestamp">${item.timestamp}</div>
+          `;
+          answersDiv.appendChild(div);
         });
       } catch (e) {
         console.error('Error fetching answers:', e);
@@ -120,8 +103,8 @@
     // Initial load
     fetchAnswers();
     
-    // Auto-refresh every 5 seconds
-    setInterval(fetchAnswers, 5000);
+    // Auto-refresh every 10 seconds
+    setInterval(fetchAnswers, 10000);
   </script>
 </body>
 </html>

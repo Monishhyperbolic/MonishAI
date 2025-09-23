@@ -13,6 +13,7 @@
     button:active { background: #333; color: #fff; }
     button:disabled { background: #555; color: #aaa; }
     .error { color: red; font-size: 14px; margin-top: 10px; }
+    .loading { color: yellow; font-size: 14px; margin-top: 10px; }
     @media (max-width: 600px) {
       button { width: 90vw; max-width: 340px; margin-bottom: 6px;}
     }
@@ -27,6 +28,7 @@
     <button id="manual-btn">Take Photo Now</button>
   </div>
   <div id="error-msg" class="error" style="display: none;"></div>
+  <div id="loading-msg" class="loading" style="display: none;">Uploading...</div>
   <script>
     document.addEventListener('DOMContentLoaded', () => {
       const video = document.getElementById('video');
@@ -34,18 +36,18 @@
       const stopBtn = document.getElementById('stop-btn');
       const manualBtn = document.getElementById('manual-btn');
       const errorMsg = document.getElementById('error-msg');
+      const loadingMsg = document.getElementById('loading-msg');
       let stream;
       let captureInterval;
 
-      if (!video || !startBtn || !stopBtn || !manualBtn || !errorMsg) {
-        console.error('DOM elements not found:', { video, startBtn, stopBtn, manualBtn, errorMsg });
+      if (!video || !startBtn || !stopBtn || !manualBtn || !errorMsg || !loadingMsg) {
+        console.error('DOM elements not found:', { video, startBtn, stopBtn, manualBtn, errorMsg, loadingMsg });
         document.body.innerHTML += '<p class="error">Error: Page elements not loaded. Refresh the page.</p>';
         return;
       }
 
       async function startCamera() {
         try {
-          // Prefer back camera, but don't enforce 'exact'
           stream = await navigator.mediaDevices.getUserMedia({
             video: { facingMode: "environment", width: { ideal: 640 }, height: { ideal: 480 } },
             audio: false
@@ -57,7 +59,6 @@
           errorMsg.textContent = `Camera error: ${e.name}. Check permissions or device support.`;
           errorMsg.style.display = 'block';
           try {
-            // Fallback to any camera
             stream = await navigator.mediaDevices.getUserMedia({
               video: { width: { ideal: 640 }, height: { ideal: 480 } },
               audio: false
@@ -81,14 +82,16 @@
           return;
         }
         const canvas = document.createElement('canvas');
-        canvas.width = Math.min(640, video.videoWidth);
+        canvas.width = Math.min(320, video.videoWidth); // Reduced resolution
         canvas.height = (video.videoHeight / video.videoWidth) * canvas.width;
         const ctx = canvas.getContext('2d');
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        loadingMsg.style.display = 'block';
         canvas.toBlob(async (blob) => {
           if (blob.size > 5 * 1024 * 1024) {
-            errorMsg.textContent = 'Image too large. Try a clearer shot.';
+            errorMsg.textContent = 'Image too large. Try again.';
             errorMsg.style.display = 'block';
+            loadingMsg.style.display = 'none';
             return;
           }
           const formData = new FormData();
@@ -97,12 +100,11 @@
             const response = await fetch('/upload', {
               method: 'POST',
               body: formData,
-              signal: AbortSignal.timeout(45000)
+              signal: AbortSignal.timeout(10000) // Reduced timeout
             });
             const data = await response.json();
             if (!response.ok) {
-              const details = data.details ? `: ${data.details}` : '';
-              throw new Error(`${data.error || 'Upload failed'}${details}`);
+              throw new Error(`${data.error || 'Upload failed'}: ${data.details || ''}`);
             }
             console.log('Upload success:', data);
             errorMsg.style.display = 'none';
@@ -115,7 +117,8 @@
             manualBtn.disabled = false;
             manualBtn.textContent = "Take Photo Now";
           }
-        }, 'image/jpeg', 0.7);
+          loadingMsg.style.display = 'none';
+        }, 'image/jpeg', 0.5); // Reduced quality
       }
 
       startBtn.onclick = () => {

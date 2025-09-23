@@ -6,6 +6,7 @@ const fetch = require('node-fetch');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
+const pRetry = require('p-retry');
 
 const app = express();
 const UPLOADS_DIR = '/data/uploads';
@@ -56,9 +57,9 @@ app.post('/upload', upload.single('image'), async (req, res) => {
     }
 
     const imgBuffer = fs.readFileSync(tempPath);
-    if (imgBuffer.length > 10 * 1024 * 1024) {
+    if (imgBuffer.length > 5 * 1024 * 1024) {
       fs.unlinkSync(tempPath);
-      return res.status(400).json({ error: 'Image too large (max 10MB)' });
+      return res.status(400).json({ error: 'Image too large (max 5MB)' });
     }
 
     const b64 = imgBuffer.toString('base64');
@@ -72,9 +73,9 @@ app.post('/upload', upload.single('image'), async (req, res) => {
       return res.status(500).json({ error: 'PPLX_API_KEY not configured' });
     }
 
-    const userPrompt = "Describe the image and answer any obvious visual questions.";
+    const userPrompt = "Based on the image, generate one relevant question about the content and provide a concise answer to it.";
 
-    const perplexityRes = await fetch('https://api.perplexity.ai/chat/completions', {
+    const perplexityRes = await pRetry(() => fetch('https://api.perplexity.ai/chat/completions', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${process.env.PPLX_API_KEY}`,
@@ -91,9 +92,9 @@ app.post('/upload', upload.single('image'), async (req, res) => {
             ]
           }
         ],
-        max_tokens: 700
+        max_tokens: 200 // Reduced tokens for faster response
       })
-    });
+    }), { retries: 3 });
 
     let responseText = await perplexityRes.text();
     if (!perplexityRes.ok) {
@@ -104,10 +105,14 @@ app.post('/upload', upload.single('image'), async (req, res) => {
 
     try {
       const pplxJson = JSON.parse(responseText);
-      const answer = pplxJson.choices?.[0]?.message?.content || 'No answer returned';
-      db.run('INSERT INTO answers (question, answer) VALUES (?, ?)', [userPrompt, answer]);
+      const response = pplxJson.choices?.[0]?.message?.content || 'No answer returned';
+      // Split response into question and answer (assuming format "Question: ... Answer: ...")
+      const parts = response.split('Answer: ');
+      const question = parts[0]?.replace('Question: ', '')?.trim() || 'What is in the image?';
+      const answer = parts[1]?.trim() || response;
+      db.run('INSERT INTO answers (question, answer) VALUES (?, ?)', [question, answer]);
       fs.unlinkSync(tempPath);
-      return res.json({ answer });
+      return res.json({ question, answer });
     } catch (err) {
       console.error("Invalid JSON from Perplexity:", responseText);
       fs.unlinkSync(tempPath);
@@ -123,14 +128,18 @@ app.post('/upload', upload.single('image'), async (req, res) => {
 app.get('/answers', (req, res) => {
   db.all('SELECT question, answer, timestamp FROM answers ORDER BY timestamp DESC LIMIT 20', (err, rows) => {
     if (err) return res.status(500).json({ error: 'Server error while fetching answers.' });
-    res.json(rows || []);
+    res.json(rows.map(row => ({
+      question: row.question,
+      answer: row.answer,
+      timestamp: row.timestamp
+    })));
   });
 });
 
 app.get('/debug/db', (req, res) => {
   db.all('SELECT * FROM answers ORDER BY id DESC LIMIT 5', (err, rows) => {
     if (err) return res.status(500).json({ error: 'Debug error' });
-    res.json(rows || []);
+    res.json(rows);
   });
 });
 
