@@ -5,6 +5,7 @@
     "express": "^5.1.0",
     "multer": "^2.0.2",
     "node-fetch": "^2.7.0",
+    "sharp": "^0.34.4",
     "sqlite3": "^5.1.7"
   },
   "scripts": {
