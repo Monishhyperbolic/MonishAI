@@ -45,10 +45,12 @@ db.serialize(() => {
   });
 });
 
+// --- MAIN FIXED UPLOAD ENDPOINT ---
 app.post('/upload', upload.single('image'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-  let tempPath = req.file.path;
+  const tempPath = req.file.path;
   try {
+    // Only JPEG images, max 10MB
     if (!req.file.mimetype.startsWith('image/jpeg')) {
       fs.unlinkSync(tempPath);
       return res.status(400).json({ error: 'Only JPEG images are supported' });
@@ -68,6 +70,9 @@ app.post('/upload', upload.single('image'), async (req, res) => {
       return res.status(500).json({ error: 'GROQ_API_KEY not configured' });
     }
 
+    // Use supported vision model only!
+    const model = "meta-llama/llama-guard-4-12b"; // From Groq production docs [attached_file:1]
+
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 30000);
 
@@ -79,7 +84,7 @@ app.post('/upload', upload.single('image'), async (req, res) => {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model: "meta-llama/llama-guard-4-12b",
+        model,
         messages: [
           {
             role: "user",
@@ -100,23 +105,34 @@ app.post('/upload', upload.single('image'), async (req, res) => {
     });
     clearTimeout(timeoutId);
 
+    // --- Robust Error Handling: Log API raw response if not OK ---
     let responseText = await groqRes.text();
     if (!groqRes.ok) {
+      console.error("Groq API error response:", responseText); // Log for debugging
       fs.unlinkSync(tempPath);
-      return res.status(500).json({ error: `Groq API failed: ${groqRes.status}` });
+      return res.status(500).json({ error: `Groq API failed: ${groqRes.status}`, details: responseText });
     }
 
     let qnaArray = [];
     try {
+      // Defensive parse: If JSON parse fails, log and respond error.
       const groqJson = JSON.parse(responseText);
-      let rawContent = groqJson.choices?.[0]?.message?.content || '[]';
-      qnaArray = JSON.parse(rawContent);
+      let rawContent = groqJson.choices?.[0]?.message?.content;
+      if (!rawContent) rawContent = '[]';
+      // Defensive content parse (could be already Array or string)
+      if (typeof rawContent === 'string') {
+        qnaArray = JSON.parse(rawContent);
+      } else {
+        qnaArray = Array.isArray(rawContent) ? rawContent : [rawContent];
+      }
       if (!Array.isArray(qnaArray)) qnaArray = [qnaArray];
     } catch (err) {
+      console.error("Invalid JSON from Groq:", responseText); // Log for debugging
       fs.unlinkSync(tempPath);
-      return res.status(500).json({ error: 'Invalid JSON from Groq' });
+      return res.status(500).json({ error: 'Invalid JSON from Groq', details: responseText });
     }
 
+    // Format output and store in DB
     const safeResults = qnaArray
       .filter(obj => obj && typeof obj === 'object')
       .map(obj => {
@@ -125,7 +141,6 @@ app.post('/upload', upload.single('image'), async (req, res) => {
         return `Question: ${question} Answer: ${answer}`;
       });
 
-    // Store in database
     qnaArray.forEach(obj => {
       const question = String(obj.question || 'No question found').trim();
       const answer = String(obj.answer || 'No answer found').trim();
@@ -136,24 +151,25 @@ app.post('/upload', upload.single('image'), async (req, res) => {
     res.json(safeResults); // Always returns array of strings
   } catch (err) {
     if (tempPath && fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
-    res.status(500).json({ error: 'Server error' });
+    console.error("Server error:", err); // Log for debugging
+    res.status(500).json({ error: 'Server error', details: err.message });
   }
 });
+
+// --- Answers and Debug endpoints unchanged ---
 
 app.get('/answers', (req, res) => {
   db.all('SELECT question, answer, timestamp FROM answers ORDER BY timestamp DESC LIMIT 20', (err, rows) => {
     if (err) {
       return res.status(500).json({ error: 'Server error while fetching answers.' });
     }
-    
     const safeResults = (rows || []).map(row => {
       const question = String(row?.question || 'No question').trim();
       const answer = String(row?.answer || 'No answer').trim();
       const timestamp = String(row?.timestamp || 'No time').trim();
       return `Question: ${question} Answer: ${answer} Time: ${timestamp}`;
     });
-    
-    res.json(safeResults); // Always returns array of strings, never undefined
+    res.json(safeResults);
   });
 });
 
