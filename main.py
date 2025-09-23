@@ -89,7 +89,7 @@ async def upload_image(file: UploadFile = File(...)):
     if not api_key:
         raise HTTPException(status_code=500, detail="API key not configured")
 
-    prompt = "Based on the image, generate one relevant question about the content and provide a concise answer to it."
+    prompt = "Based on the image, write the question in image and provide final answer to it, it will be mostly a mcq so dont give explantion."
 
     @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
     async def call_perplexity():
