@@ -124,7 +124,7 @@ async def upload_image(file: UploadFile = File(...)):
 
     # This detailed prompt guides the LLM to return the data in a predictable format,
     # making the response easier to parse reliably.
-    prompt = """Analyze the provided image and generate a single, relevant question about its content, followed by a concise answer.
+    prompt = """Analyze the provided image and return question in the image and a final answer to it , it mostly will be a mcq so be strict on giving the final answer i dont want explanation .
 
 Please format your response *exactly* as follows, with no additional text or explanations:
 Question: [Your question here]
