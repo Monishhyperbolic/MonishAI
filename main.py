@@ -5,11 +5,9 @@ import base64
 import logging
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 from tenacity import retry, stop_after_attempt, wait_fixed
 import uvicorn
-
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -17,16 +15,16 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
-# Configure CORS properly
+# Setup CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Or set specific origins for better security
+    allow_origins=["*"],  # Adjust for production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Setup file storage directory
+# File storage setup
 STORAGE_PATH = os.getenv("STORAGE_PATH", "/tmp")
 UPLOADS_DIR = Path(STORAGE_PATH) / "uploads"
 DB_PATH = Path(STORAGE_PATH) / "answers.db"
@@ -46,11 +44,10 @@ def init_database():
                 )
             """)
             conn.commit()
-            logger.info("SQLite database initialized.")
+            logger.info("Database initialized successfully.")
     except sqlite3.Error as e:
-        logger.error(f"Database initialization failed: {e}")
+        logger.error(f"Failed to initialize database: {e}")
         raise SystemExit(1)
-
 
 init_database()
 
@@ -60,7 +57,7 @@ async def upload_image(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="No file uploaded")
 
     if not file.content_type.startswith("image/jpeg"):
-        raise HTTPException(status_code=400, detail="Only JPEG images are supported")
+        raise HTTPException(status_code=400, detail="Only JPEG images supported")
 
     try:
         content = await file.read()
@@ -68,7 +65,7 @@ async def upload_image(file: UploadFile = File(...)):
             raise HTTPException(status_code=400, detail="Image too large (max 5MB)")
     except Exception as e:
         logger.error(f"Error reading uploaded file: {e}")
-        raise HTTPException(status_code=500, detail=f"Error reading file: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"File read error: {str(e)}")
 
     b64 = base64.b64encode(content).decode("utf-8")
     if not b64.startswith("/9j/"):
@@ -106,16 +103,16 @@ async def upload_image(file: UploadFile = File(...)):
             ) as response:
                 if not response.ok:
                     error_text = await response.text()
-                    raise HTTPException(status_code=500, detail=f"Perplexity API failed: {response.status} - {error_text}")
+                    raise HTTPException(status_code=500, detail=f"Perplexity API error: {response.status} - {error_text}")
                 return await response.json()
 
     try:
         data = await call_perplexity()
     except Exception as e:
         logger.error(f"Perplexity API call failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Perplexity API error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Perplexity API call error: {str(e)}")
 
-    content = data.get("choices", [{}])[0].get("message", {}).get("content", "No response from API")
+    content = data.get("choices", [{}])[0].get("message", {}).get("content", "No response")
     parts = content.split("Answer: ")
     question = parts[0].replace("Question: ", "").strip() if len(parts) > 1 else "What is in the image?"
     answer = parts[1].strip() if len(parts) > 1 else content
@@ -138,7 +135,7 @@ async def get_answers():
             cursor = conn.cursor()
             cursor.execute("SELECT question, answer, timestamp FROM answers ORDER BY timestamp DESC LIMIT 20")
             rows = cursor.fetchall()
-            return [{"question": row[0], "answer": row[1], "timestamp": row[2]} for row in rows]
+            return [{"question": r[0], "answer": r[1], "timestamp": r[2]} for r in rows]
     except sqlite3.Error as e:
         logger.error(f"Database query error: {e}")
         raise HTTPException(status_code=500, detail=f"Error fetching answers: {str(e)}")
@@ -147,13 +144,12 @@ async def get_answers():
 async def health():
     return {"status": "OK"}
 
-
 if __name__ == "__main__":
     port_str = os.getenv("PORT", "8080")
     try:
         port = int(port_str)
     except ValueError:
+        logger.warning(f"Invalid PORT value '{port_str}', defaulting to 8080")
         port = 8080
-        logger.warning(f"Invalid PORT '{port_str}' environment variable, falling back to {port}")
 
     uvicorn.run(app, host="0.0.0.0", port=port)
