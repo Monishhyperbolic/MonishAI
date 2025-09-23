@@ -1,14 +1,21 @@
 {
-  "dependencies": {
-    "cors": "^2.8.5",
-    "dotenv": "^17.2.2",
-    "express": "^5.1.0",
-    "multer": "^2.0.2",
-    "node-fetch": "^2.7.0",
-    "sharp": "^0.34.4",
-    "sqlite3": "^5.1.7"
-  },
+  "name": "camera-app",
+  "version": "1.0.0",
+  "description": "Camera Q&A app",
+  "main": "server.js",
   "scripts": {
     "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "multer": "^1.4.5-lts.1",
+    "sqlite3": "^5.1.7",
+    "node-fetch": "^2.7.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "p-retry": "^6.2.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
