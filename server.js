@@ -45,12 +45,12 @@ db.serialize(() => {
   });
 });
 
-// --- MAIN FIXED UPLOAD ENDPOINT ---
+// Upload endpoint (robust to unexpected Groq responses)
 app.post('/upload', upload.single('image'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   const tempPath = req.file.path;
   try {
-    // Only JPEG images, max 10MB
+    // File checks
     if (!req.file.mimetype.startsWith('image/jpeg')) {
       fs.unlinkSync(tempPath);
       return res.status(400).json({ error: 'Only JPEG images are supported' });
@@ -70,8 +70,8 @@ app.post('/upload', upload.single('image'), async (req, res) => {
       return res.status(500).json({ error: 'GROQ_API_KEY not configured' });
     }
 
-    // Use supported vision model only!
-    const model = "meta-llama/llama-guard-4-12b"; // From Groq production docs [attached_file:1]
+    // Only use supported production vision model!
+    const model = "meta-llama/llama-guard-4-12b";
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 30000);
@@ -105,29 +105,31 @@ app.post('/upload', upload.single('image'), async (req, res) => {
     });
     clearTimeout(timeoutId);
 
-    // --- Robust Error Handling: Log API raw response if not OK ---
     let responseText = await groqRes.text();
     if (!groqRes.ok) {
-      console.error("Groq API error response:", responseText); // Log for debugging
+      console.error("Groq API error response:", responseText);
       fs.unlinkSync(tempPath);
       return res.status(500).json({ error: `Groq API failed: ${groqRes.status}`, details: responseText });
     }
 
     let qnaArray = [];
     try {
-      // Defensive parse: If JSON parse fails, log and respond error.
       const groqJson = JSON.parse(responseText);
       let rawContent = groqJson.choices?.[0]?.message?.content;
-      if (!rawContent) rawContent = '[]';
-      // Defensive content parse (could be already Array or string)
-      if (typeof rawContent === 'string') {
+
+      // Robust handling: parse JSON array, or plain string
+      if (typeof rawContent === 'string' && rawContent.trim().startsWith('[')) {
         qnaArray = JSON.parse(rawContent);
+        if (!Array.isArray(qnaArray)) qnaArray = [qnaArray];
+      } else if (typeof rawContent === 'string') {
+        // Single string fallback
+        qnaArray = [{ question: "Status", answer: rawContent }];
       } else {
-        qnaArray = Array.isArray(rawContent) ? rawContent : [rawContent];
+        // Unexpected: fallback to empty array
+        qnaArray = [{ question: "Status", answer: "No content returned from Groq." }];
       }
-      if (!Array.isArray(qnaArray)) qnaArray = [qnaArray];
     } catch (err) {
-      console.error("Invalid JSON from Groq:", responseText); // Log for debugging
+      console.error("Invalid JSON from Groq:", responseText);
       fs.unlinkSync(tempPath);
       return res.status(500).json({ error: 'Invalid JSON from Groq', details: responseText });
     }
@@ -148,16 +150,15 @@ app.post('/upload', upload.single('image'), async (req, res) => {
     });
 
     fs.unlinkSync(tempPath);
-    res.json(safeResults); // Always returns array of strings
+    res.json(safeResults);
   } catch (err) {
     if (tempPath && fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
-    console.error("Server error:", err); // Log for debugging
+    console.error("Server error:", err);
     res.status(500).json({ error: 'Server error', details: err.message });
   }
 });
 
-// --- Answers and Debug endpoints unchanged ---
-
+// Answers endpoint
 app.get('/answers', (req, res) => {
   db.all('SELECT question, answer, timestamp FROM answers ORDER BY timestamp DESC LIMIT 20', (err, rows) => {
     if (err) {
@@ -173,6 +174,7 @@ app.get('/answers', (req, res) => {
   });
 });
 
+// Debug endpoint
 app.get('/debug/db', (req, res) => {
   db.all('SELECT * FROM answers ORDER BY id DESC LIMIT 5', (err, rows) => {
     if (err) return res.status(500).json({ error: 'Debug error' });
