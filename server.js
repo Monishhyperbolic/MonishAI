@@ -71,7 +71,7 @@ app.post('/upload', upload.single('image'), async (req, res) => {
     }
 
     // Only use supported production vision model!
-    const model = "meta-llama/llama-guard-4-12b";
+    const model = "openai/gpt-oss-120b";
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 30000);
