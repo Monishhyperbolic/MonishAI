@@ -45,7 +45,7 @@ db.serialize(() => {
   });
 });
 
-// Upload endpoint (robust to unexpected Groq responses)
+// Perplexity AI image Q&A upload endpoint
 app.post('/upload', upload.single('image'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   const tempPath = req.file.path;
@@ -65,89 +65,58 @@ app.post('/upload', upload.single('image'), async (req, res) => {
       fs.unlinkSync(tempPath);
       return res.status(400).json({ error: 'Invalid JPEG base64' });
     }
-    if (!process.env.GROQ_API_KEY) {
+    if (!process.env.PPLX_API_KEY) {
       fs.unlinkSync(tempPath);
-      return res.status(500).json({ error: 'GROQ_API_KEY not configured' });
+      return res.status(500).json({ error: 'PPLX_API_KEY not configured' });
     }
 
-    // Only use supported production vision model!
-    const model = "openai/gpt-oss-120b";
+    // Example prompt for visual Q&A
+    const userPrompt = "Describe the image and answer any obvious visual questions.";
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30000);
-
-    const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    // Perplexity API (as of 2025, see docs)
+    const perplexityRes = await fetch('https://api.perplexity.ai/chat/completions', {
       method: 'POST',
-      signal: controller.signal,
       headers: {
-        'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
+        'Authorization': `Bearer ${process.env.PPLX_API_KEY}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model,
+        model: "vision-ai-20b", // Replace with available model name from Perplexity docs if needed
         messages: [
           {
             role: "user",
             content: [
-              {
-                type: "text",
-                text: `Analyze the image. For every question, return ONLY a JSON array like [{"question": "...", "answer": "..."}]. No other text.`
-              },
-              {
-                type: "image_url",
-                image_url: { url: `data:image/jpeg;base64,${b64}` }
-              }
+              { type: "text", text: userPrompt },
+              { type: "image_url", image_url: { url: `data:image/jpeg;base64,${b64}` } }
             ]
           }
         ],
         max_tokens: 700
       })
     });
-    clearTimeout(timeoutId);
 
-    let responseText = await groqRes.text();
-    if (!groqRes.ok) {
-      console.error("Groq API error response:", responseText);
+    let responseText = await perplexityRes.text();
+    if (!perplexityRes.ok) {
+      console.error("Perplexity API error response:", responseText);
       fs.unlinkSync(tempPath);
-      return res.status(500).json({ error: `Groq API failed: ${groqRes.status}`, details: responseText });
+      return res.status(500).json({ error: `Perplexity API failed: ${perplexityRes.status}`, details: responseText });
     }
 
-    let qnaArray = [];
+    let safeResults = [];
     try {
-      const groqJson = JSON.parse(responseText);
-      let rawContent = groqJson.choices?.[0]?.message?.content;
-
-      // Robust handling: parse JSON array, or plain string
-      if (typeof rawContent === 'string' && rawContent.trim().startsWith('[')) {
-        qnaArray = JSON.parse(rawContent);
-        if (!Array.isArray(qnaArray)) qnaArray = [qnaArray];
-      } else if (typeof rawContent === 'string') {
-        // Single string fallback
-        qnaArray = [{ question: "Status", answer: rawContent }];
-      } else {
-        // Unexpected: fallback to empty array
-        qnaArray = [{ question: "Status", answer: "No content returned from Groq." }];
-      }
+      const pplxJson = JSON.parse(responseText);
+      // Perplexity returns text in .choices[0].message.content (plain text or list)
+      const answer = pplxJson.choices?.[0]?.message?.content;
+      safeResults = [
+        `Question: ${userPrompt} Answer: ${answer || 'No answer returned'}`
+      ];
+      // Store Q&A in DB
+      db.run('INSERT INTO answers (question, answer) VALUES (?, ?)', [userPrompt, answer || 'No answer returned']);
     } catch (err) {
-      console.error("Invalid JSON from Groq:", responseText);
+      console.error("Invalid JSON from Perplexity:", responseText);
       fs.unlinkSync(tempPath);
-      return res.status(500).json({ error: 'Invalid JSON from Groq', details: responseText });
+      return res.status(500).json({ error: 'Invalid JSON from Perplexity', details: responseText });
     }
-
-    // Format output and store in DB
-    const safeResults = qnaArray
-      .filter(obj => obj && typeof obj === 'object')
-      .map(obj => {
-        const question = String(obj.question || 'No question found').trim();
-        const answer = String(obj.answer || 'No answer found').trim();
-        return `Question: ${question} Answer: ${answer}`;
-      });
-
-    qnaArray.forEach(obj => {
-      const question = String(obj.question || 'No question found').trim();
-      const answer = String(obj.answer || 'No answer found').trim();
-      db.run('INSERT INTO answers (question, answer) VALUES (?, ?)', [question, answer]);
-    });
 
     fs.unlinkSync(tempPath);
     res.json(safeResults);
