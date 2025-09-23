@@ -134,9 +134,8 @@ Answer: [Your answer here]"""
     async def call_perplexity_api():
         """Calls the Perplexity API with retry logic."""
         logger.info("Calling Perplexity API...")
-        # *** FIX: Using a current, powerful model with vision capabilities. ***
-        # 'llama-3-sonar-large-32k-online' is a strong choice for this task.
-        model_name = "llama-3-sonar-large-32k-online"
+        # Switched model to sonar-reasoning-pro as requested for debugging.
+        model_name = "sonar-reasoning-pro"
         
         headers = {
             "Authorization": f"Bearer {api_key}",
@@ -253,3 +252,4 @@ if __name__ == "__main__":
 
     logger.info(f"Starting server on http://0.0.0.0:{port}")
     uvicorn.run(app, host="0.0.0.0", port=port)
+
