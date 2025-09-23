@@ -15,25 +15,25 @@ import uvicorn
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize FastAPI app before mounting or middleware
+# Initialize FastAPI app
 app = FastAPI()
 
 # Define static directory path
 STATIC_DIR = Path(__file__).parent / "static"
 
-# Mount static files directory at /static
+# Mount static files under /static
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-# Setup CORS middleware
+# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # For production, restrict origins if needed
+    allow_origins=["*"],  # Restrict origins in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# File storage config
+# File storage setup
 STORAGE_PATH = os.getenv("STORAGE_PATH", "/tmp")
 UPLOADS_DIR = Path(STORAGE_PATH) / "uploads"
 DB_PATH = Path(STORAGE_PATH) / "answers.db"
@@ -60,10 +60,20 @@ def init_database():
 
 init_database()
 
-# Serve index.html on root URL
+# Serve index.html at root
 @app.get("/")
 async def root():
     return FileResponse(STATIC_DIR / "index.html")
+
+# Serve camera.html at /camera
+@app.get("/camera")
+async def camera():
+    return FileResponse(STATIC_DIR / "camera.html")
+
+# Serve answers.html at /answers_page
+@app.get("/answers_page")
+async def answers_page():
+    return FileResponse(STATIC_DIR / "answers.html")
 
 @app.post("/upload")
 async def upload_image(file: UploadFile = File(...)):
