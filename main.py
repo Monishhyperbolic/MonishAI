@@ -3,6 +3,7 @@ import sqlite3
 import aiohttp
 import base64
 import logging
+
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -11,35 +12,35 @@ from pathlib import Path
 from tenacity import retry, stop_after_attempt, wait_fixed
 import uvicorn
 
-# Configure logging
+# Logging config
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize FastAPI app
+# FastAPI app instance
 app = FastAPI()
 
-# Define static directory path
+# Static directory
 STATIC_DIR = Path(__file__).parent / "static"
 
 # Mount static files under /static
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-# Add CORS middleware
+# Enable CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Restrict origins in production
+    allow_origins=["*"],  # Change to your domain in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# File storage setup
+# Storage setup
 STORAGE_PATH = os.getenv("STORAGE_PATH", "/tmp")
 UPLOADS_DIR = Path(STORAGE_PATH) / "uploads"
 DB_PATH = Path(STORAGE_PATH) / "answers.db"
-
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
+# Initialize DB
 def init_database():
     try:
         with sqlite3.connect(DB_PATH) as conn:
@@ -62,7 +63,7 @@ init_database()
 
 # Serve index.html at root
 @app.get("/")
-async def root():
+async def index():
     return FileResponse(STATIC_DIR / "index.html")
 
 # Serve camera.html at /camera
@@ -75,6 +76,7 @@ async def camera():
 async def answers_page():
     return FileResponse(STATIC_DIR / "answers.html")
 
+# Image Upload endpoint (requires python-multipart package)
 @app.post("/upload")
 async def upload_image(file: UploadFile = File(...)):
     if not file:
@@ -152,6 +154,7 @@ async def upload_image(file: UploadFile = File(...)):
 
     return {"question": question, "answer": answer}
 
+# Fetch last 20 answers
 @app.get("/answers")
 async def get_answers():
     try:
@@ -164,6 +167,7 @@ async def get_answers():
         logger.error(f"Database query error: {e}")
         raise HTTPException(status_code=500, detail=f"Error fetching answers: {str(e)}")
 
+# Health check
 @app.get("/health")
 async def health():
     return {"status": "OK"}
@@ -173,7 +177,7 @@ if __name__ == "__main__":
     try:
         port = int(port_str)
     except ValueError:
-        logger.warning(f"Invalid PORT value '{port_str}', defaulting to 8080")
+        logger.warning(f"Invalid PORT '{port_str}', defaulting to 8080")
         port = 8080
 
     uvicorn.run(app, host="0.0.0.0", port=port)
