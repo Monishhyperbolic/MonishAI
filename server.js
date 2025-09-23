@@ -102,41 +102,28 @@ app.post('/upload', upload.single('image'), async (req, res) => {
       return res.status(500).json({ error: `Perplexity API failed: ${perplexityRes.status}`, details: responseText });
     }
 
-    let safeResults = [];
     try {
       const pplxJson = JSON.parse(responseText);
-      const answer = pplxJson.choices?.[0]?.message?.content;
-      safeResults = [
-        `Question: ${userPrompt} Answer: ${answer || 'No answer returned'}`
-      ];
-
-      db.run('INSERT INTO answers (question, answer) VALUES (?, ?)', [userPrompt, answer || 'No answer returned']);
+      const answer = pplxJson.choices?.[0]?.message?.content || 'No answer returned';
+      db.run('INSERT INTO answers (question, answer) VALUES (?, ?)', [userPrompt, answer]);
+      fs.unlinkSync(tempPath);
+      return res.json({ answer });
     } catch (err) {
       console.error("Invalid JSON from Perplexity:", responseText);
       fs.unlinkSync(tempPath);
       return res.status(500).json({ error: 'Invalid JSON from Perplexity', details: responseText });
     }
-
-    fs.unlinkSync(tempPath);
-    res.json(safeResults);
   } catch (err) {
     if (tempPath && fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
     console.error("Server error:", err);
-    res.status(500).json({ error: 'Server error', details: err.message });
+    return res.status(500).json({ error: 'Server error', details: err.message });
   }
 });
 
 app.get('/answers', (req, res) => {
   db.all('SELECT question, answer, timestamp FROM answers ORDER BY timestamp DESC LIMIT 20', (err, rows) => {
     if (err) return res.status(500).json({ error: 'Server error while fetching answers.' });
-
-    const safeResults = (rows || []).map(row => {
-      const question = String(row?.question || 'No question').trim();
-      const answer = String(row?.answer || 'No answer').trim();
-      const timestamp = String(row?.timestamp || 'No time').trim();
-      return `Question: ${question} Answer: ${answer} Time: ${timestamp}`;
-    });
-    res.json(safeResults);
+    res.json(rows || []);
   });
 });
 
