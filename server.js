@@ -79,7 +79,7 @@ app.post('/upload', upload.single('image'), async (req, res) => {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model: "llama/llama-4-scout-17b-16e-instruct ",
+        model: "meta-llama/llama-guard-4-12b",
         messages: [
           {
             role: "user",
