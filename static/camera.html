@@ -84,11 +84,13 @@
           return;
         }
         const canvas = document.createElement('canvas');
-        canvas.width = Math.min(320, video.videoWidth); // Reduced resolution
+        canvas.width = Math.min(320, video.videoWidth);
         canvas.height = (video.videoHeight / video.videoWidth) * canvas.width;
         const ctx = canvas.getContext('2d');
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
         loadingMsg.style.display = 'block';
+
         canvas.toBlob(async (blob) => {
           if (blob.size > 5 * 1024 * 1024) {
             errorMsg.textContent = 'Image too large. Try again.';
@@ -97,17 +99,17 @@
             return;
           }
           const formData = new FormData();
-          // Changed 'image' to 'file' to match FastAPI param name
-          formData.append('file', blob, 'frame.jpg');
+          formData.append('file', blob, 'frame.jpg');  // Form data key is 'file' to match backend
+
           try {
             const response = await fetch('/upload', {
               method: 'POST',
               body: formData,
-              signal: AbortSignal.timeout(10000)
+              // Remove timeout signal to avoid premature abort
             });
             const data = await response.json();
             if (!response.ok) {
-              throw new Error(`${data.detail || 'Upload failed'}`);
+              throw new Error(data.detail || 'Upload failed');
             }
             console.log('Upload success:', data);
             errorMsg.style.display = 'none';
