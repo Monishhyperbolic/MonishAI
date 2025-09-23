@@ -5,39 +5,35 @@ import base64
 import logging
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pathlib import Path
-from tenacity import retry, stop_after_attempt, wait_fixed
-import uvicorn
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
-
-# Define static directory path (adjust if different)
-STATIC_DIR = Path(__file__).parent / "static"
-
-# Mount static directory to serve static files at "/static"
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-
-@app.get("/")
-async def root():
-    return FileResponse(STATIC_DIR / "index.html")
+from tenacity import retry, stop_after_attempt, wait_fixed
+import uvicorn
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Initialize FastAPI app before mounting or middleware
 app = FastAPI()
 
-# Setup CORS
+# Define static directory path
+STATIC_DIR = Path(__file__).parent / "static"
+
+# Mount static files directory at /static
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+# Setup CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Adjust for production
+    allow_origins=["*"],  # For production, restrict origins if needed
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# File storage setup
+# File storage config
 STORAGE_PATH = os.getenv("STORAGE_PATH", "/tmp")
 UPLOADS_DIR = Path(STORAGE_PATH) / "uploads"
 DB_PATH = Path(STORAGE_PATH) / "answers.db"
@@ -63,6 +59,11 @@ def init_database():
         raise SystemExit(1)
 
 init_database()
+
+# Serve index.html on root URL
+@app.get("/")
+async def root():
+    return FileResponse(STATIC_DIR / "index.html")
 
 @app.post("/upload")
 async def upload_image(file: UploadFile = File(...)):
@@ -166,7 +167,3 @@ if __name__ == "__main__":
         port = 8080
 
     uvicorn.run(app, host="0.0.0.0", port=port)
-@app.get("/")
-async def root():
-    return {"message": "Welcome to the Answers API. Use /upload, /answers, or /health endpoints."}
-
