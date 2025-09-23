@@ -17,6 +17,7 @@ if (!fs.existsSync(UPLOADS_DIR)) {
 }
 
 const upload = multer({ dest: UPLOADS_DIR });
+
 const db = new sqlite3.Database(DB_PATH, (err) => {
   if (err) console.error('Database connect error:', err);
 });
@@ -33,7 +34,7 @@ db.serialize(() => {
   )`, err => { if (err) console.error('Table create error:', err); });
 });
 
-// Main endpoint: compress image, send to Perplexity, return only final Q&A pair.
+// Aggressively compress and return JSON ONLY
 app.post('/upload', upload.single('image'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   const tempPath = req.file.path;
@@ -42,11 +43,12 @@ app.post('/upload', upload.single('image'), async (req, res) => {
       fs.unlinkSync(tempPath);
       return res.status(400).json({ error: 'Only JPEG images are supported' });
     }
+    // Resize/compress for best latency: ~500px wide, quality 70
     let compressedBuffer;
     try {
       compressedBuffer = await sharp(tempPath)
-        .resize({ width: 900 })
-        .jpeg({ quality: 80 })
+        .resize({ width: 500 })
+        .jpeg({ quality: 70 })
         .toBuffer();
     } catch (e) {
       fs.unlinkSync(tempPath);
@@ -101,24 +103,27 @@ app.post('/upload', upload.single('image'), async (req, res) => {
       return res.status(500).json({ error: 'Invalid JSON from Perplexity', details: responseText });
     }
 
-    // Only return the final Q&A string, never arrays
-    res.send(`Question: ${userPrompt}\nAnswer: ${answer || 'No answer returned'}`);
+    // Always return plain JSON with the Q/A pair
+    res.json({
+      question: userPrompt,
+      answer: answer || 'No answer returned'
+    });
 
   } catch (err) {
     res.status(500).json({ error: 'Server error', details: err.message });
   }
 });
 
+// Always return array of Q/A JSON objects
 app.get('/answers', (req, res) => {
   db.all('SELECT question, answer, timestamp FROM answers ORDER BY timestamp DESC LIMIT 20', (err, rows) => {
     if (err) return res.status(500).json({ error: 'Server error while fetching answers.' });
-    const safeResults = (rows || []).map(row => {
-      const question = String(row?.question || 'No question').trim();
-      const answer = String(row?.answer || 'No answer').trim();
-      const timestamp = String(row?.timestamp || 'No time').trim();
-      return `Question: ${question}\nAnswer: ${answer}\nTime: ${timestamp}`;
-    });
-    res.send(safeResults.join('\n\n'));
+    const safeResults = (rows || []).map(row => ({
+      question: String(row?.question || 'No question').trim(),
+      answer: String(row?.answer || 'No answer').trim(),
+      timestamp: String(row?.timestamp || 'No time').trim()
+    }));
+    res.json(safeResults);
   });
 });
 
