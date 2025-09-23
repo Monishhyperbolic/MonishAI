@@ -79,7 +79,7 @@ app.post('/upload', upload.single('image'), async (req, res) => {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model: "qwen-qwq-32b",
+        model: "qwen/qwen3-32b",
         messages: [
           {
             role: "user",
