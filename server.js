@@ -9,103 +9,57 @@ const fs = require('fs');
 const pRetry = require('p-retry');
 
 const app = express();
-const UPLOADS_DIR = path.join(process.cwd(), 'data', 'uploads');
-const DB_PATH = path.join(process.cwd(), 'data', 'answers.db');
+const UPLOADS_DIR = '/tmp/uploads';
+const DB_PATH = '/tmp/answers.db';
 
-// Ensure data directory exists
-const DATA_DIR = path.join(process.cwd(), 'data');
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-}
 if (!fs.existsSync(UPLOADS_DIR)) {
   fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 }
 
 const upload = multer({ dest: UPLOADS_DIR });
-let db; // Will be initialized after error handlers
+const db = new sqlite3.Database(DB_PATH, (err) => {
+  if (err) {
+    console.error('Database connection error:', err);
+    process.exit(1); // Exit gracefully to allow Railway to restart
+  } else {
+    console.log('Connected to SQLite database');
+  }
+});
 
 app.use(cors());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Global error handlers to prevent crashes
-process.on('uncaughtException', (err) => {
-  console.error('Uncaught Exception:', err);
-  // Don't exit; log and continue if possible
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-  // Don't exit; log and continue
-});
-
-// Initialize DB with error handling
-function initDB() {
-  return new Promise((resolve, reject) => {
-    db = new sqlite3.Database(DB_PATH, (err) => {
-      if (err) {
-        console.error('Database connection error:', err);
-        reject(err);
-      } else {
-        console.log('Connected to SQLite database');
-        resolve();
+db.serialize(() => {
+  db.run(`CREATE TABLE IF NOT EXISTS answers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    question TEXT DEFAULT '',
+    answer TEXT DEFAULT '',
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`, err => {
+    if (err) {
+      console.error('Table create error:', err);
+      process.exit(1);
+    }
+    db.all("PRAGMA table_info(answers)", (e2, columns) => {
+      if (e2) {
+        console.error('PRAGMA error:', e2);
+        return;
+      }
+      const names = columns.map(c => c.name);
+      if (!names.includes('question')) {
+        db.run('ALTER TABLE answers ADD COLUMN question TEXT DEFAULT ""');
+      }
+      if (!names.includes('answer')) {
+        db.run('ALTER TABLE answers ADD COLUMN answer TEXT DEFAULT ""');
       }
     });
   });
-}
-
-// Table setup
-function setupTable() {
-  return new Promise((resolve, reject) => {
-    if (!db) return reject(new Error('DB not initialized'));
-    db.serialize(() => {
-      db.run(`CREATE TABLE IF NOT EXISTS answers (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        question TEXT DEFAULT '',
-        answer TEXT DEFAULT '',
-        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-      )`, (err) => {
-        if (err) {
-          console.error('Table create error:', err);
-          reject(err);
-        } else {
-          db.all("PRAGMA table_info(answers)", (e2, columns) => {
-            if (e2) {
-              console.error('PRAGMA error:', e2);
-              reject(e2);
-              return;
-            }
-            const names = columns.map(c => c.name);
-            if (!names.includes('question')) {
-              db.run('ALTER TABLE answers ADD COLUMN question TEXT DEFAULT ""', reject);
-            } else {
-              resolve();
-            }
-            if (!names.includes('answer')) {
-              db.run('ALTER TABLE answers ADD COLUMN answer TEXT DEFAULT ""', reject);
-            } else {
-              resolve();
-            }
-          });
-        }
-      });
-    });
-  });
-}
-
-// Initialize DB on startup
-async function startDB() {
-  try {
-    await initDB();
-    await setupTable();
-  } catch (err) {
-    console.error('Failed to initialize DB:', err);
-    // Continue without DB for now; endpoints will handle gracefully
-  }
-}
-startDB();
+});
 
 app.post('/upload', upload.single('image'), async (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  if (!req.file) {
+    return res.status(400).json({ error: 'No file uploaded' });
+  }
 
   const tempPath = req.file.path;
   try {
@@ -133,26 +87,33 @@ app.post('/upload', upload.single('image'), async (req, res) => {
 
     const userPrompt = "Based on the image, generate one relevant question about the content and provide a concise answer to it.";
 
-    const perplexityRes = await pRetry(() => fetch('https://api.perplexity.ai/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${process.env.PPLX_API_KEY}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: "sonar-reasoning-pro",
-        messages: [
-          {
-            role: "user",
-            content: [
-              { type: "text", text: userPrompt },
-              { type: "image_url", image_url: { url: `data:image/jpeg;base64,${b64}` } }
-            ]
-          }
-        ],
-        max_tokens: 200
-      })
-    }), { retries: 3 });
+    let perplexityRes;
+    try {
+      perplexityRes = await pRetry(() => fetch('https://api.perplexity.ai/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${process.env.PPLX_API_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: "sonar-reasoning-pro",
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: userPrompt },
+                { type: "image_url", image_url: { url: `data:image/jpeg;base64,${b64}` } }
+              ]
+            }
+          ],
+          max_tokens: 200
+        })
+      }), { retries: 3 });
+    } catch (err) {
+      console.error('Perplexity API fetch error:', err);
+      fs.unlinkSync(tempPath);
+      return res.status(500).json({ error: 'Perplexity API unavailable', details: err.message });
+    }
 
     let responseText = await perplexityRes.text();
     if (!perplexityRes.ok) {
@@ -167,18 +128,14 @@ app.post('/upload', upload.single('image'), async (req, res) => {
       const parts = response.split('Answer: ');
       const question = parts[0]?.replace('Question: ', '')?.trim() || 'What is in the image?';
       const answer = parts[1]?.trim() || response;
-
-      // Store in DB if available
-      if (db) {
-        db.run('INSERT INTO answers (question, answer) VALUES (?, ?)', [question, answer], (err) => {
-          if (err) console.error('DB insert error:', err);
-        });
-      } else {
-        console.warn('DB not available; skipping insert');
-      }
-
-      fs.unlinkSync(tempPath);
-      return res.json({ question, answer });
+      db.run('INSERT INTO answers (question, answer) VALUES (?, ?)', [question, answer], (err) => {
+        if (err) {
+          console.error('Database insert error:', err);
+          return res.status(500).json({ error: 'Database error', details: err.message });
+        }
+        fs.unlinkSync(tempPath);
+        res.json({ question, answer });
+      });
     } catch (err) {
       console.error("Invalid JSON from Perplexity:", responseText);
       fs.unlinkSync(tempPath);
@@ -192,12 +149,9 @@ app.post('/upload', upload.single('image'), async (req, res) => {
 });
 
 app.get('/answers', (req, res) => {
-  if (!db) {
-    return res.json([]); // Graceful fallback
-  }
   db.all('SELECT question, answer, timestamp FROM answers ORDER BY timestamp DESC LIMIT 20', (err, rows) => {
     if (err) {
-      console.error('DB query error:', err);
+      console.error('Database query error:', err);
       return res.status(500).json({ error: 'Server error while fetching answers.' });
     }
     res.json(rows.map(row => ({
@@ -208,22 +162,5 @@ app.get('/answers', (req, res) => {
   });
 });
 
-app.get('/debug/db', (req, res) => {
-  if (!db) {
-    return res.json({ error: 'DB not available' });
-  }
-  db.all('SELECT * FROM answers ORDER BY id DESC LIMIT 5', (err, rows) => {
-    if (err) {
-      console.error('Debug error:', err);
-      return res.status(500).json({ error: 'Debug error' });
-    }
-    res.json(rows);
-  });
-});
-
-// Bind to Railway's required host/port
-const PORT = process.env.PORT || 5000;
-const HOST = process.env.HOST || '0.0.0.0';
-app.listen(PORT, HOST, () => {
-  console.log(`Server running on ${HOST}:${PORT}`);
-});
+const PORT = process.env.PORT || 8080; // Default to 8080 for Railway
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
