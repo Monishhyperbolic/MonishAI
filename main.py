@@ -12,6 +12,7 @@ from pathlib import Path
 from tenacity import retry, stop_after_attempt, wait_fixed
 import uvicorn
 
+# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -22,7 +23,7 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # Adjust in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -66,7 +67,7 @@ async def answers_page():
     return FileResponse(STATIC_DIR / "answers.html")
 
 @app.post("/upload")
-async def upload_image(file: UploadFile = File(...)):
+async def upload_image(file: UploadFile = File(...)):  # expects form-data key 'file'
     if not file:
         raise HTTPException(status_code=400, detail="No file uploaded")
 
@@ -89,7 +90,7 @@ async def upload_image(file: UploadFile = File(...)):
     if not api_key:
         raise HTTPException(status_code=500, detail="API key not configured")
 
-    prompt = "Based on the image, write the question in image and provide final answer to it, it will be mostly a mcq so dont give explantion."
+    prompt = "Based on the image, generate one relevant question about the content and provide a concise answer to it."
 
     @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
     async def call_perplexity():
@@ -127,14 +128,27 @@ async def upload_image(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"Perplexity API call error: {str(e)}")
 
     content = data.get("choices", [{}])[0].get("message", {}).get("content", "No response")
-    parts = content.split("Answer: ")
-    question = parts[0].replace("Question: ", "").strip() if len(parts) > 1 else "What is in the image?"
-    answer = parts[1].strip() if len(parts) > 1 else content
+
+    # Parse question and answer neatly
+    question = ""
+    answer = ""
+
+    if "Question:" in content and "Answer:" in content:
+        q_start = content.find("Question:") + len("Question:")
+        a_start = content.find("Answer:")
+        question = content[q_start:a_start].strip()
+        answer = content[a_start + len("Answer:"):].strip()
+    else:
+        question = "What is in the image?"
+        answer = content.strip()
 
     try:
         with sqlite3.connect(DB_PATH) as conn:
             cursor = conn.cursor()
-            cursor.execute("INSERT INTO answers (question, answer) VALUES (?, ?)", (question, answer))
+            cursor.execute(
+                "INSERT INTO answers (question, answer) VALUES (?, ?)",
+                (question, answer),
+            )
             conn.commit()
     except sqlite3.Error as e:
         logger.error(f"Database insert error: {e}")
@@ -147,9 +161,14 @@ async def get_answers():
     try:
         with sqlite3.connect(DB_PATH) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT question, answer, timestamp FROM answers ORDER BY timestamp DESC LIMIT 20")
+            cursor.execute(
+                "SELECT question, answer, timestamp FROM answers ORDER BY timestamp DESC LIMIT 20"
+            )
             rows = cursor.fetchall()
-            return [{"question": r[0], "answer": r[1], "timestamp": r[2]} for r in rows]
+            return [
+                {"question": r[0], "answer": r[1], "timestamp": r[2]}
+                for r in rows
+            ]
     except sqlite3.Error as e:
         logger.error(f"Database query error: {e}")
         raise HTTPException(status_code=500, detail=f"Error fetching answers: {str(e)}")
@@ -163,7 +182,7 @@ if __name__ == "__main__":
     try:
         port = int(port_str)
     except ValueError:
-        logger.warning(f"Invalid PORT '{port_str}', defaulting to 8080")
+        logger.warning(f"Invalid PORT value '{port_str}', defaulting to 8080")
         port = 8080
 
     uvicorn.run(app, host="0.0.0.0", port=port)
