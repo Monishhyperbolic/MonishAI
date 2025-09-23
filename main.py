@@ -67,7 +67,7 @@ async def answers_page():
     return FileResponse(STATIC_DIR / "answers.html")
 
 @app.post("/upload")
-async def upload_image(file: UploadFile = File(...)):  # expects form-data key 'file'
+async def upload_image(file: UploadFile = File(...)):
     if not file:
         raise HTTPException(status_code=400, detail="No file uploaded")
 
@@ -94,6 +94,7 @@ async def upload_image(file: UploadFile = File(...)):  # expects form-data key '
 
     @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
     async def call_perplexity():
+        logger.info("Calling Perplexity API...")
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 "https://api.perplexity.ai/chat/completions",
@@ -114,11 +115,13 @@ async def upload_image(file: UploadFile = File(...)):  # expects form-data key '
                     ],
                     "max_tokens": 200,
                 },
-                timeout=10,
+                timeout=30,  # Increased timeout from 10 to 30 seconds
             ) as response:
                 if not response.ok:
                     error_text = await response.text()
+                    logger.error(f"Perplexity API error: {response.status} - {error_text}")
                     raise HTTPException(status_code=500, detail=f"Perplexity API error: {response.status} - {error_text}")
+                logger.info("Perplexity API call succeeded.")
                 return await response.json()
 
     try:
@@ -129,7 +132,6 @@ async def upload_image(file: UploadFile = File(...)):  # expects form-data key '
 
     content = data.get("choices", [{}])[0].get("message", {}).get("content", "No response")
 
-    # Parse question and answer neatly
     question = ""
     answer = ""
 
@@ -150,6 +152,7 @@ async def upload_image(file: UploadFile = File(...)):  # expects form-data key '
                 (question, answer),
             )
             conn.commit()
+            logger.info("Stored question and answer in DB.")
     except sqlite3.Error as e:
         logger.error(f"Database insert error: {e}")
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
@@ -166,8 +169,7 @@ async def get_answers():
             )
             rows = cursor.fetchall()
             return [
-                {"question": r[0], "answer": r[1], "timestamp": r[2]}
-                for r in rows
+                {"question": r[0], "answer": r[1], "timestamp": r[2]} for r in rows
             ]
     except sqlite3.Error as e:
         logger.error(f"Database query error: {e}")
