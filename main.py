@@ -8,6 +8,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
 from tenacity import retry, stop_after_attempt, wait_fixed
 import uvicorn
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from pathlib import Path
+
+# Define static directory path (adjust if different)
+STATIC_DIR = Path(__file__).parent / "static"
+
+# Mount static directory to serve static files at "/static"
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+@app.get("/")
+async def root():
+    return FileResponse(STATIC_DIR / "index.html")
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
