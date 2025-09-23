@@ -81,7 +81,7 @@ app.post('/upload', upload.single('image'), async (req, res) => {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model: "vision-ai-20b", // Replace with available model name from Perplexity docs if needed
+        model: "sonar-medium-chat", // Replace with available model name from Perplexity docs if needed
         messages: [
           {
             role: "user",
